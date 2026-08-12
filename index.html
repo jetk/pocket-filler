@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="color-scheme" content="light">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Pocket Filler</title>
+<style>
+  :root {
+    --paper: #faf8f4;
+    --ink: #2a2622;
+    --dot: #c6c0b4;
+    --chrome: #efece6;
+    --edge: #ddd8ce;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--paper); color: var(--ink);
+    font: 500 14px/1 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; flex-direction: column; }
+  #sheet { flex: 1; display: block; width: 100%; touch-action: none; }
+
+  #bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px calc(6px + env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom));
+    background: var(--chrome); border-top: 1px solid var(--edge);
+  }
+  button {
+    font: inherit; color: var(--ink); background: var(--paper);
+    border: 1px solid var(--edge); border-radius: 8px;
+    height: 36px; min-width: 34px; padding: 0 6px;
+    display: grid; place-items: center;
+  }
+  button:active { background: var(--edge); }
+  #mode { min-width: 56px; }
+  #mode[data-mode="fill"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  #swatches { display: flex; gap: 4px; flex: 1; min-width: 0; justify-content: center; }
+  .swatch {
+    flex: 0 1 26px; height: 26px; min-width: 0; padding: 0;
+    border-radius: 50%; border: 2px solid transparent;
+  }
+  .swatch[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.12); }
+</style>
+</head>
+<body>
+  <canvas id="sheet"></canvas>
+  <div id="bar">
+    <button id="mode" data-mode="draw" title="Toggle draw / fill">Draw</button>
+    <div id="swatches"></div>
+    <button id="undo" title="Undo last line">&#8630;</button>
+    <button id="clear" title="Clear everything">&#10005;</button>
+    <button id="share" title="Copy a link to this drawing">&#8599;</button>
+  </div>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
