@@ -235,13 +235,37 @@ document.getElementById('undo').onclick = () => {
   draw();
 };
 
-document.getElementById('clear').onclick = () => {
-  if (!state.lines.length || !confirm('Clear the whole drawing?')) return;
+// Two taps to clear, rather than confirm() — embedded webviews suppress or hang
+// on modal dialogs, and a modal is a poor fit for a thumb anyway.
+const clearBtn = document.getElementById('clear');
+let armedUntil = 0, disarmTimer = 0;
+
+function disarm() {
+  clearTimeout(disarmTimer);
+  armedUntil = 0;
+  clearBtn.innerHTML = '&#10005;';
+  clearBtn.classList.remove('armed');
+}
+
+clearBtn.onclick = () => {
+  if (!state.lines.length) return;
+  // Ignore a second tap that lands too fast to be a decision — a stray
+  // double-tap should not be able to wipe the sheet.
+  if (armedUntil && armedUntil - Date.now() > 2750) return;
+  if (Date.now() > armedUntil) {
+    armedUntil = Date.now() + 3000;
+    clearBtn.textContent = 'Sure?';
+    clearBtn.classList.add('armed');
+    clearTimeout(disarmTimer);
+    disarmTimer = setTimeout(disarm, 3000);
+    return;
+  }
+  disarm();
   state.lines = [];
   state.fills = {};
   state.chain = null;
   facesStale = true;
-  location.hash = '';
+  history.replaceState(null, '', location.pathname);
   save();
   draw();
 };
