@@ -40,6 +40,16 @@
   #mode { min-width: 56px; }
   #mode[data-mode="fill"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
   button.armed { background: #c0392b; color: #fff; border-color: #c0392b; }
+
+  #toast {
+    position: fixed; left: 12px; right: 12px; bottom: 60px;
+    padding: 10px 12px; border-radius: 8px;
+    background: var(--ink); color: var(--paper);
+    line-height: 1.35; text-align: center;
+    opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s;
+    pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: none; }
   #swatches { display: flex; gap: 4px; flex: 1; min-width: 0; justify-content: center; }
   .swatch {
     flex: 0 1 26px; height: 26px; min-width: 0; padding: 0;
@@ -50,6 +60,7 @@
 </head>
 <body>
   <canvas id="sheet"></canvas>
+  <div id="toast" role="status" aria-live="polite"></div>
   <div id="bar">
     <button id="mode" data-mode="draw" title="Toggle draw / fill">Draw</button>
     <div id="swatches"></div>

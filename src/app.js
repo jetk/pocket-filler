@@ -1,4 +1,5 @@
 import { computeFaces, faceAt } from './planar.js';
+import { encode, decode, decodeLegacy } from './codec.js';
 
 // px per grid unit. Nominally 1 cm (96 CSS px per inch), but CSS px drift from
 // physical size per device — hold a ruler to the screen and tune this.
@@ -179,8 +180,14 @@ canvas.addEventListener('pointermove', (e) => {
 
 // --- persistence -----------------------------------------------------------
 
-const encode = (o) => btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const decode = (s) => JSON.parse(atob(s.replace(/-/g, '+').replace(/_/g, '/')));
+let toastTimer = 0;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+}
 
 let saveTimer = 0;
 function save() {
@@ -190,14 +197,33 @@ function save() {
   }, 250);
 }
 
+function fromLocal() {
+  try {
+    const j = JSON.parse(localStorage.getItem(STORE));
+    return Array.isArray(j?.l) ? { l: j.l, f: j.f || {} } : null;
+  } catch { return null; }
+}
+
 function load() {
-  // A shared link wins over whatever was left in this browser.
-  const src = location.hash.length > 1
-    ? (() => { try { return decode(location.hash.slice(1)); } catch { return null; } })()
-    : (() => { try { return JSON.parse(localStorage.getItem(STORE)); } catch { return null; } })();
-  if (!src || !Array.isArray(src.l)) return;
+  // A shared link wins over whatever was left in this browser — but a broken
+  // link must say so and hand the sheet back, not blank it in silence.
+  let src = null;
+  const hash = location.hash.slice(1);
+  if (hash) {
+    try {
+      src = decode(hash);
+    } catch {
+      try {
+        src = decodeLegacy(hash);
+      } catch {
+        toast('That link is incomplete — it was probably cut short when shared.');
+      }
+    }
+  }
+  src ||= fromLocal();
+  if (!src) return;
   state.lines = src.l;
-  state.fills = src.f || {};
+  state.fills = src.f;
   facesStale = true;
 }
 
@@ -271,13 +297,26 @@ clearBtn.onclick = () => {
 };
 
 document.getElementById('share').onclick = async (e) => {
-  location.hash = encode({ l: state.lines, f: state.fills });
+  if (!state.lines.length) return;
+  // Only fills whose pocket still exists are worth sending.
+  const live = new Set(getFaces().map((f) => f.key));
+  const f = Object.fromEntries(Object.entries(state.fills).filter(([k]) => live.has(k)));
+
+  try {
+    history.replaceState(null, '', '#' + encode({ l: state.lines, f }));
+  } catch (err) {
+    return toast(err.message);
+  }
+
+  const b = e.currentTarget;
   try {
     await navigator.clipboard.writeText(location.href);
-    const b = e.currentTarget;
     b.textContent = '✓';
     setTimeout(() => { b.innerHTML = '&#8599;'; }, 1200);
-  } catch {}
+  } catch {
+    toast('Clipboard blocked — the link is in the address bar.');
+  }
+  if (location.href.length > 1800) toast('This link is very long; some apps may cut it short.');
 };
 
 // ponytail: stale fill keys are left in state.fills on purpose — undo brings the
