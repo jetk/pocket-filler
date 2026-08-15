@@ -1,0 +1,66 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { pickMoves } from '../src/dance.js';
+
+// deterministic stand-in for Math.random
+const seeded = (seed) => () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+
+// step 1 packs nodes solid, so neighbours block each other; real drawings are
+// spread out, which is what `step` is for.
+const grid = (w, h, step = 1) => {
+  const out = [];
+  for (let x = 0; x < w; x++) for (let y = 0; y < h; y++) out.push([x * step, y * step]);
+  return out;
+};
+
+test('moves exactly as many nodes as asked', () => {
+  const moves = pickMoves(grid(4, 4, 3), 5, 20, 20, seeded(1));
+  assert.equal(moves.length, 5);
+});
+
+test('never asks for more nodes than exist', () => {
+  const moves = pickMoves([[0, 0], [2, 2]], 9, 20, 20, seeded(2));
+  assert.equal(moves.length, 2);
+});
+
+test('each node moves exactly one grid position', () => {
+  for (const [from, to] of pickMoves(grid(4, 4, 3), 12, 20, 20, seeded(3))) {
+    const dx = Math.abs(to[0] - from[0]), dy = Math.abs(to[1] - from[1]);
+    assert.ok(dx <= 1 && dy <= 1 && dx + dy > 0, `bad step ${from} -> ${to}`);
+  }
+});
+
+test('never steps off the grid', () => {
+  // a 3x3 grid of nodes filling a 3x3 board: every legal step is inward
+  for (let s = 0; s < 40; s++) {
+    for (const [, to] of pickMoves(grid(3, 3), 9, 3, 3, seeded(s))) {
+      assert.ok(to[0] >= 0 && to[0] < 3 && to[1] >= 0 && to[1] < 3, `off grid: ${to}`);
+    }
+  }
+});
+
+test('no two nodes land on the same point, which would weld them', () => {
+  for (let s = 0; s < 40; s++) {
+    const nodes = grid(4, 4, 2);   // gaps between nodes, so collisions are reachable
+    const moves = pickMoves(nodes, 16, 8, 8, seeded(s));
+    const occupied = new Set(nodes.map((n) => n.join(',')));
+    for (const [from, to] of moves) {
+      occupied.delete(from.join(','));
+      assert.ok(!occupied.has(to.join(',')), `collision at ${to} (seed ${s})`);
+      occupied.add(to.join(','));
+    }
+    assert.equal(occupied.size, nodes.length);
+  }
+});
+
+test('a fully boxed-in node is skipped rather than forced', () => {
+  // the centre of a full 3x3 block on a 3x3 board has nowhere legal to go
+  const moves = pickMoves(grid(3, 3), 9, 3, 3, seeded(7));
+  assert.ok(moves.length < 9);
+});
+
+test('picks a different set from tick to tick', () => {
+  const a = JSON.stringify(pickMoves(grid(4, 4, 3), 4, 20, 20, seeded(11)));
+  const b = JSON.stringify(pickMoves(grid(4, 4, 3), 4, 20, 20, seeded(12)));
+  assert.notEqual(a, b);
+});

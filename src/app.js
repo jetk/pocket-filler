@@ -1,5 +1,6 @@
 import { computeFaces, faceAt } from './planar.js';
 import { encode, decode, decodeLegacy } from './codec.js';
+import { pickMoves } from './dance.js';
 
 // px per grid unit. Nominally 1 cm (96 CSS px per inch), but CSS px drift from
 // physical size per device — hold a ruler to the screen and tune this.
@@ -21,6 +22,7 @@ let faces = [];
 let facesStale = true;
 let hover = null;                         // rubber-band target (mouse only)
 let drag = null;                          // { at: [x, y] } while a node is being moved
+let dance = null;                         // { resting, timer } while dancing
 
 const toGrid = (px, py) => [(px - ox) / CM, (py - oy) / CM];
 const toPx = (gx, gy) => [ox + gx * CM, oy + gy * CM];
@@ -220,6 +222,7 @@ const local = (e) => {
 };
 
 canvas.addEventListener('pointerdown', (e) => {
+  if (dance) return;   // edits during a dance would be thrown away by the snap back
   down = { x: e.clientX, y: e.clientY, t: Date.now() };
   if (state.mode !== 'move') return;
   const n = nearestNode(...local(e));
@@ -332,6 +335,7 @@ PALETTE.forEach((c, i) => {
 
 const modeBtn = document.getElementById('mode');
 modeBtn.onclick = () => {
+  stopDance();
   state.mode = MODES[(MODES.indexOf(state.mode) + 1) % MODES.length];
   modeBtn.dataset.mode = state.mode;
   modeBtn.textContent = state.mode[0].toUpperCase() + state.mode.slice(1);
@@ -353,7 +357,53 @@ function undo() {
   draw();
 }
 
-document.getElementById('undo').onclick = undo;
+document.getElementById('undo').onclick = () => { stopDance(); undo(); };
+
+// --- dance -----------------------------------------------------------------
+
+const TICK = 350;   // jerky on purpose for now
+const danceBtn = document.getElementById('dance');
+const danceBar = document.getElementById('dancebar');
+const dancers = document.getElementById('dancers');
+const dancerCount = document.getElementById('dancercount');
+
+// Every tick starts from the resting drawing rather than from the last tick, so
+// the shape wobbles around its original instead of wandering off — and stopping
+// is the same restore the tick already does.
+function danceTick() {
+  state.lines = JSON.parse(dance.resting);
+  const nodes = [...occupiedNodes()].map((k) => k.split(',').map(Number));
+  for (const [from, to] of pickMoves(nodes, +dancers.value, cols, rows)) moveNode(from, to);
+  facesStale = true;
+  draw();
+}
+
+function startDance() {
+  if (dance || !state.lines.length) return;
+  dance = { resting: JSON.stringify(state.lines), timer: setInterval(danceTick, TICK) };
+  danceBtn.classList.add('dancing');
+  danceBar.hidden = false;
+  state.chain = null;
+  drag = null;
+  danceTick();
+}
+
+function stopDance() {
+  if (!dance) return;
+  clearInterval(dance.timer);
+  state.lines = JSON.parse(dance.resting);   // snap back to where it started
+  dance = null;
+  danceBtn.classList.remove('dancing');
+  danceBar.hidden = true;
+  facesStale = true;
+  draw();
+}
+
+danceBtn.onclick = () => (dance ? stopDance() : startDance());
+dancers.oninput = () => {
+  dancerCount.textContent = dancers.value;
+  if (dance) danceTick();
+};
 
 // Two taps to clear, rather than confirm() — embedded webviews suppress or hang
 // on modal dialogs, and a modal is a poor fit for a thumb anyway.
@@ -368,6 +418,7 @@ function disarm() {
 }
 
 clearBtn.onclick = () => {
+  stopDance();
   if (!state.lines.length) return;
   // Ignore a second tap that lands too fast to be a decision — a stray
   // double-tap should not be able to wipe the sheet.
@@ -392,6 +443,7 @@ clearBtn.onclick = () => {
 };
 
 document.getElementById('share').onclick = async (e) => {
+  stopDance();   // share the drawing, not a random frame of it
   if (!state.lines.length) return;
   // Only fills whose pocket still exists are worth sending.
   const live = new Set(getFaces().map((f) => f.key));

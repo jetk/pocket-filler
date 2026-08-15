@@ -21,6 +21,7 @@ The mode button cycles **Draw → Fill → Move**.
 - **Draw** — tap a node to start. Each further node extends the chain. Tap the node you're on to finish; if you haven't drawn a segment yet, that cancels. Tap the first node once two or more segments exist to close the loop.
 - **Fill** — pick a swatch, tap a pocket. Tapping it again with the same color clears it.
 - **Move** — drag any node; every line meeting it follows, snapping node to node. Fills stay with their pocket.
+- **♪ Dance** — nudges random nodes one position in a random direction, a few times a second. The slider sets how many move at once. Each tick is offset from the resting drawing rather than the previous tick, so the shape wobbles in place instead of wandering off, and switching it off restores the original exactly. Canvas edits are ignored while it runs; the other buttons stop it first.
 - **Undo** steps back through draws, fills, moves and clears — a whole drag counts as one. **Share** puts the drawing in the URL and copies the link. Everything autosaves locally.
 
 ## Driving it from the console
