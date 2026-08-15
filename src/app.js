@@ -12,6 +12,7 @@ const STORE = 'pocket-filler';
 // lines: [ax, ay, bx, by] in grid units; the array index is the line's id, which
 // is what face keys are built from — so ordering must stay stable.
 const state = { lines: [], fills: {}, mode: 'draw', color: 0, chain: null };
+const MODES = ['draw', 'fill', 'move'];
 
 const canvas = document.getElementById('sheet');
 const ctx = canvas.getContext('2d');
@@ -19,6 +20,7 @@ let cols = 0, rows = 0, ox = 0, oy = 0;   // grid extent and screen origin
 let faces = [];
 let facesStale = true;
 let hover = null;                         // rubber-band target (mouse only)
+let drag = null;                          // { at: [x, y] } while a node is being moved
 
 const toGrid = (px, py) => [(px - ox) / CM, (py - oy) / CM];
 const toPx = (gx, gy) => [ox + gx * CM, oy + gy * CM];
@@ -36,6 +38,40 @@ function nearestNode(gx, gy) {
   const i = Math.round(gx), j = Math.round(gy);
   if (i < 0 || j < 0 || i >= cols || j >= rows) return null;
   return Math.hypot(gx - i, gy - j) <= SNAP ? [i, j] : null;
+}
+
+// Nodes are identified by position, not by id: every line endpoint sitting on a
+// grid point is the same node. Coordinates are exact integers, so equality is
+// safe, and dragging keeps them welded because they all land on the same target.
+function occupiedNodes() {
+  const s = new Set();
+  for (const [ax, ay, bx, by] of state.lines) s.add(`${ax},${ay}`).add(`${bx},${by}`);
+  return s;
+}
+
+// The animation seam. A drag is just repeated calls to this, and anything
+// driving the drawing programmatically should come through here too.
+export function moveNode([fx, fy], [tx, ty]) {
+  if (fx === tx && fy === ty) return false;
+  let touched = false;
+  for (const l of state.lines) {
+    if (l[0] === fx && l[1] === fy) { l[0] = tx; l[1] = ty; touched = true; }
+    if (l[2] === fx && l[3] === fy) { l[2] = tx; l[3] = ty; touched = true; }
+  }
+  // ponytail: a line whose ends meet is left in place rather than deleted.
+  // Removing it would renumber every later line and break the fill keys that
+  // are built from those numbers; kept, it costs 4 URL characters and comes
+  // back intact when the node is dragged away again.
+  if (touched) facesStale = true;
+  return touched;
+}
+
+// Snapshots, not an operation log: uniform across draw, fill and move, and a
+// drag undoes as one step because the snapshot is taken when it starts.
+const undoStack = [];
+function snapshot() {
+  undoStack.push(JSON.stringify({ l: state.lines, f: state.fills }));
+  if (undoStack.length > 50) undoStack.shift();
 }
 
 // --- rendering -------------------------------------------------------------
@@ -79,6 +115,22 @@ function render() {
     ctx.lineTo(...toPx(bx, by));
   }
   ctx.stroke();
+
+  // In move mode the nodes you can actually grab need to be visible.
+  if (state.mode === 'move') {
+    for (const k of occupiedNodes()) {
+      const [gx, gy] = k.split(',').map(Number);
+      const [x, y] = toPx(gx, gy);
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#faf8f4';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#2a2622';
+      ctx.stroke();
+    }
+    if (drag) ring(drag.at, '#c0392b', true);
+  }
 
   if (state.chain) {
     const first = state.chain[0], last = state.chain.at(-1);
@@ -125,9 +177,12 @@ function resize() {
 function tap(px, py) {
   const [gx, gy] = toGrid(px, py);
 
+  if (state.mode === 'move') return;   // move mode works by dragging, not tapping
+
   if (state.mode === 'fill') {
     const f = faceAt(getFaces(), gx, gy);
     if (!f) return;
+    snapshot();
     if (state.fills[f.key] === state.color) delete state.fills[f.key];
     else state.fills[f.key] = state.color;
     save();
@@ -153,13 +208,49 @@ function tap(px, py) {
 }
 
 function addLine(a, b) {
+  snapshot();
   state.lines.push([a[0], a[1], b[0], b[1]]);
   facesStale = true;
 }
 
 let down = null;
-canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: Date.now() }; });
+const local = (e) => {
+  const r = canvas.getBoundingClientRect();
+  return toGrid(e.clientX - r.left, e.clientY - r.top);
+};
+
+canvas.addEventListener('pointerdown', (e) => {
+  down = { x: e.clientX, y: e.clientY, t: Date.now() };
+  if (state.mode !== 'move') return;
+  const n = nearestNode(...local(e));
+  if (!n || !occupiedNodes().has(`${n[0]},${n[1]}`)) return;
+  snapshot();
+  drag = { at: n, moved: false };
+  try { canvas.setPointerCapture(e.pointerId); } catch {}   // capture is a nicety, not a requirement
+  draw();
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (drag) {
+    const n = nearestNode(...local(e));
+    if (n && moveNode(drag.at, n)) { drag.at = n; drag.moved = true; draw(); }
+    return;
+  }
+  if (e.pointerType !== 'mouse' || !state.chain) return;
+  const n = nearestNode(...local(e));
+  const changed = !!n !== !!hover || (n && hover && !same(n, hover));
+  hover = n;
+  if (changed) draw();
+});
+
 canvas.addEventListener('pointerup', (e) => {
+  if (drag) {
+    if (!drag.moved) undoStack.pop();   // a grab that went nowhere is not a step
+    else save();
+    drag = null;
+    down = null;
+    return draw();
+  }
   if (!down) return;
   const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
   const held = Date.now() - down.t;
@@ -168,14 +259,10 @@ canvas.addEventListener('pointerup', (e) => {
   const r = canvas.getBoundingClientRect();
   tap(e.clientX - r.left, e.clientY - r.top);
 });
-canvas.addEventListener('pointercancel', () => { down = null; });
-canvas.addEventListener('pointermove', (e) => {
-  if (e.pointerType !== 'mouse' || !state.chain) return;
-  const r = canvas.getBoundingClientRect();
-  const n = nearestNode(...toGrid(e.clientX - r.left, e.clientY - r.top));
-  const changed = !!n !== !!hover || (n && hover && !same(n, hover));
-  hover = n;
-  if (changed) draw();
+
+canvas.addEventListener('pointercancel', () => {
+  if (drag) { undo(); drag = null; }
+  down = null;
 });
 
 // --- persistence -----------------------------------------------------------
@@ -245,21 +332,28 @@ PALETTE.forEach((c, i) => {
 
 const modeBtn = document.getElementById('mode');
 modeBtn.onclick = () => {
-  state.mode = state.mode === 'draw' ? 'fill' : 'draw';
+  state.mode = MODES[(MODES.indexOf(state.mode) + 1) % MODES.length];
   modeBtn.dataset.mode = state.mode;
-  modeBtn.textContent = state.mode === 'draw' ? 'Draw' : 'Fill';
+  modeBtn.textContent = state.mode[0].toUpperCase() + state.mode.slice(1);
   state.chain = null;
   hover = null;
+  drag = null;
   draw();
 };
 
-document.getElementById('undo').onclick = () => {
-  state.lines.pop();
+function undo() {
+  const prev = undoStack.pop();
+  if (!prev) return;
+  const { l, f } = JSON.parse(prev);
+  state.lines = l;
+  state.fills = f;
   state.chain = null;
   facesStale = true;
   save();
   draw();
-};
+}
+
+document.getElementById('undo').onclick = undo;
 
 // Two taps to clear, rather than confirm() — embedded webviews suppress or hang
 // on modal dialogs, and a modal is a poor fit for a thumb anyway.
@@ -287,6 +381,7 @@ clearBtn.onclick = () => {
     return;
   }
   disarm();
+  snapshot();
   state.lines = [];
   state.fills = {};
   state.chain = null;
@@ -321,6 +416,11 @@ document.getElementById('share').onclick = async (e) => {
 
 // ponytail: stale fill keys are left in state.fills on purpose — undo brings the
 // pocket and its color back together. They cost a few bytes and nothing else.
+
+// Console handle for driving the drawing programmatically — the groundwork for
+// animation. moveNode is the same call the drag uses:
+//   pf.moveNode([3, 5], [4, 6]); pf.redraw();
+window.pf = { state, moveNode, redraw: () => { facesStale = true; draw(); }, faces: getFaces };
 
 new ResizeObserver(resize).observe(canvas);
 load();
