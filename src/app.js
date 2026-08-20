@@ -1,6 +1,7 @@
 import { computeFaces, faceAt } from './planar.js';
 import { encode, decode, decodeLegacy } from './codec.js';
 import { pickMoves } from './dance.js';
+import { shapeNodes, translate, applyMoves } from './shapes.js';
 
 // px per grid unit. Nominally 1 cm (96 CSS px per inch), but CSS px drift from
 // physical size per device — hold a ruler to the screen and tune this.
@@ -53,19 +54,57 @@ function occupiedNodes() {
 
 // The animation seam. A drag is just repeated calls to this, and anything
 // driving the drawing programmatically should come through here too.
-export function moveNode([fx, fy], [tx, ty]) {
-  if (fx === tx && fy === ty) return false;
-  let touched = false;
-  for (const l of state.lines) {
-    if (l[0] === fx && l[1] === fy) { l[0] = tx; l[1] = ty; touched = true; }
-    if (l[2] === fx && l[3] === fy) { l[2] = tx; l[3] = ty; touched = true; }
-  }
-  // ponytail: a line whose ends meet is left in place rather than deleted.
-  // Removing it would renumber every later line and break the fill keys that
-  // are built from those numbers; kept, it costs 4 URL characters and comes
-  // back intact when the node is dragged away again.
+//
+// ponytail: a line whose ends meet is left in place rather than deleted.
+// Removing it would renumber every later line and break the fill keys that
+// are built from those numbers; kept, it costs 4 URL characters and comes
+// back intact when the node is dragged away again.
+export function moveNodes(deltas) {
+  const touched = applyMoves(state.lines, deltas);
   if (touched) facesStale = true;
   return touched;
+}
+
+export function moveNode([fx, fy], to) {
+  return moveNodes(new Map([[`${fx},${fy}`, to]]));
+}
+
+// --- shapes ----------------------------------------------------------------
+
+// A colored pocket is the closest thing to a shape this drawing has. The user
+// has already pointed at the region that means something, so there's nothing to
+// infer and no clustering heuristic to get wrong; uncolored pockets stay
+// anonymous. Fills outlive their pocket on purpose (see the note by the bottom
+// of this file), so a key with no live face is simply not a shape today.
+export function shapes() {
+  const occupied = occupiedNodes();
+  return getFaces()
+    .filter((f) => state.fills[f.key] !== undefined)
+    .map((f) => ({ key: f.key, color: state.fills[f.key], nodes: shapeNodes(f, occupied) }));
+}
+
+// Tethered, not detached: nodes are shared by position, so a line that merely
+// touches the shape follows by one end and stretches. That's the whole of the
+// "rigid body" here — the shape keeps its own form, the web around it gives.
+export function moveShape(key, delta) {
+  const shape = shapes().find((s) => s.key === key);
+  if (!shape) return false;
+  const deltas = translate(shape.nodes, delta, cols, rows);
+  if (!deltas) return false;                      // would leave the sheet
+
+  const before = JSON.stringify(state.lines);
+  if (!moveNodes(deltas)) return false;
+
+  // A step that crosses another line re-cuts the pocket, and the new face is
+  // keyed off a different set of bounding lines — so the color would be left
+  // behind on a pocket that no longer exists. Refusing the step is cheaper than
+  // re-homing the fill, and keeps the shape a shape.
+  if (!getFaces().some((f) => f.key === key)) {
+    state.lines = JSON.parse(before);
+    facesStale = true;
+    return false;
+  }
+  return true;
 }
 
 // Snapshots, not an operation log: uniform across draw, fill and move, and a
@@ -472,7 +511,13 @@ document.getElementById('share').onclick = async (e) => {
 // Console handle for driving the drawing programmatically — the groundwork for
 // animation. moveNode is the same call the drag uses:
 //   pf.moveNode([3, 5], [4, 6]); pf.redraw();
-window.pf = { state, moveNode, redraw: () => { facesStale = true; draw(); }, faces: getFaces };
+//   pf.shapes();                             // one entry per filled pocket
+//   pf.moveShape(pf.shapes()[0].key, [1, 0]); pf.redraw();
+window.pf = {
+  state, moveNode, moveNodes, shapes, moveShape,
+  redraw: () => { facesStale = true; draw(); },
+  faces: getFaces,
+};
 
 new ResizeObserver(resize).observe(canvas);
 load();
