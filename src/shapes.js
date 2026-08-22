@@ -36,6 +36,20 @@ export function translate(nodes, [dx, dy], cols, rows) {
   return deltas;
 }
 
+// Would this translation park a node on top of one that isn't moving with it?
+// Nodes are identified by position, so landing on an occupied point welds the
+// two together — which is what makes a drag snap node to node, and a trap for a
+// shape: a corner coming to rest on another shape's corner joins them silently,
+// and from then on each drags the other about. A target that some *moving* node
+// is vacating this same step is fine.
+export function wouldWeld(deltas, occupied) {
+  for (const [, [tx, ty]] of deltas) {
+    const k = `${tx},${ty}`;
+    if (occupied.has(k) && !deltas.has(k)) return true;
+  }
+  return false;
+}
+
 // deltas: Map("x,y" -> [tx, ty]). Every endpoint of a line is read before
 // either is written, so a group move can't alias: shifting {(3,5),(4,5)} right
 // by one would otherwise weld the first node onto the second, and then carry

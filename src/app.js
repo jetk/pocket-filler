@@ -1,7 +1,7 @@
 import { computeFaces, faceAt } from './planar.js';
 import { encode, decode, decodeLegacy } from './codec.js';
 import { pickMoves, pickDancers, wander } from './dance.js';
-import { shapeNodes, translate, applyMoves } from './shapes.js';
+import { shapeNodes, translate, applyMoves, wouldWeld } from './shapes.js';
 
 // px per grid unit. Nominally 1 cm (96 CSS px per inch), but CSS px drift from
 // physical size per device — hold a ruler to the screen and tune this.
@@ -93,6 +93,12 @@ export function moveShape(key, delta) {
   if (!shape) return false;
   const deltas = translate(shape.nodes, delta, cols, rows);
   if (!deltas) return false;                      // would leave the sheet
+
+  // The guard below only notices a move that re-cuts a pocket. Two shapes
+  // meeting corner to corner cut nothing — they just weld, and thereafter drag
+  // each other around and past their leash. The point dance already refuses
+  // this for single nodes; this is the same rule, shape-sized.
+  if (wouldWeld(deltas, occupiedNodes())) return false;
 
   const before = JSON.stringify(state.lines);
   if (!moveNodes(deltas)) return false;

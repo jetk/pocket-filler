@@ -52,7 +52,9 @@ pf.moveShape(pf.shapes()[0].key, [1, 0]);    // one grid step right
 pf.redraw();
 ```
 
-The move is tethered rather than detached: the shape keeps its own form, and any line that merely touches it follows by one end and stretches. `moveShape` returns `false` and changes nothing if the step would take a node off the sheet, or if it would cut the pocket against another line — that re-keys the face and would strand the color, so the step is refused instead.
+The move is tethered rather than detached: the shape keeps its own form, and any line that merely touches it follows by one end and stretches. `moveShape` returns `false` and changes nothing if the step would take a node off the sheet, cut the pocket against another line, or land a node on top of one that isn't moving with it.
+
+That last rule is what keeps two shapes from sticking together. Nodes are identified by position, which is what makes a drag snap node to node — but it means a shape coming to rest corner-on-corner with another welds the two silently. A shared corner cuts no edge, so the topology check sees nothing wrong, and from then on each shape drags the other about and past its leash. Shapes stop short of each other instead.
 
 Not every corner of a pocket can be carried. A boundary corner that is a crossing rather than a line end has no node to move, on the grid or off it; it slides as its two lines move. A shape bounded partly by a line running past it will change form as it goes.
 

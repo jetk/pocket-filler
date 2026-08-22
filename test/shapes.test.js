@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeFaces } from '../src/planar.js';
-import { shapeNodes, translate, applyMoves } from '../src/shapes.js';
+import { shapeNodes, translate, applyMoves, wouldWeld } from '../src/shapes.js';
 
 const segs = (...pairs) => pairs.map((p, id) => ({ id, a: [p[0], p[1]], b: [p[2], p[3]] }));
 const occupied = (...pairs) => {
@@ -59,6 +59,30 @@ test('a shape carries the lines welded to it and stretches the rest', () => {
   applyMoves(lines, deltas);
   assert.deepEqual(lines.slice(0, 4), [[3, 2, 5, 2], [5, 2, 5, 4], [5, 4, 3, 4], [3, 4, 3, 2]]);
   assert.deepEqual(lines[4], [3, 2, 0, 0]);            // near end followed, far end stayed
+});
+
+test('a step onto a node that is not coming along would weld', () => {
+  const deltas = translate([[2, 2]], [1, 0], 10, 10);        // (2,2) -> (3,2)
+  assert.equal(wouldWeld(deltas, occupied([3, 2, 5, 5])), true);
+});
+
+test('a step onto a point another moving node is vacating is fine', () => {
+  // The whole square shifts right: (4,2) is occupied now, but its occupant
+  // moves on in the same step, so nothing welds.
+  const square = [[2, 2, 4, 2], [4, 2, 4, 4], [4, 4, 2, 4], [2, 4, 2, 2]];
+  const deltas = translate([[2, 2], [4, 2], [4, 4], [2, 4]], [1, 0], 10, 10);
+  assert.equal(wouldWeld(deltas, occupied(...square)), false);
+});
+
+test('a shape meeting another corner to corner is caught', () => {
+  // B sits up and to the right of A, so only their corners can ever touch.
+  const b = [[4, 2, 6, 2], [6, 2, 6, 4], [6, 4, 4, 4], [4, 4, 4, 2]];
+  const at = (x) => [[x, 0], [x + 2, 0], [x + 2, 2], [x, 2]];
+  const linesAt = (x) => [[x, 0, x + 2, 0], [x + 2, 0, x + 2, 2], [x + 2, 2, x, 2], [x, 2, x, 0]];
+
+  // Two clear steps: A's corner reaches (3,2), then (4,2) — B's corner.
+  assert.equal(wouldWeld(translate(at(0), [1, 0], 20, 20), occupied(...linesAt(0), ...b)), false);
+  assert.equal(wouldWeld(translate(at(1), [1, 0], 20, 20), occupied(...linesAt(1), ...b)), true);
 });
 
 test('a no-op move reports nothing happened', () => {
