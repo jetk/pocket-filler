@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickMoves, wander } from '../src/dance.js';
+import { pickMoves, pickDancers, wander } from '../src/dance.js';
 
 // deterministic stand-in for Math.random
 const seeded = (seed) => () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
@@ -94,6 +94,33 @@ test('a leash of zero pins the shape at rest', () => {
   let off = [0, 0];
   for (let t = 0; t < 30; t++) off = wander(off, 0, rand);
   assert.deepEqual(off, [0, 0]);
+});
+
+test('picks exactly as many shapes as asked, without repeats', () => {
+  const keys = ['a', 'b', 'c', 'd', 'e'];
+  const picked = pickDancers(keys, 3, seeded(1));
+  assert.equal(picked.length, 3);
+  assert.equal(new Set(picked).size, 3);
+  assert.ok(picked.every((k) => keys.includes(k)));
+});
+
+test('never picks more shapes than there are', () => {
+  assert.equal(pickDancers(['a', 'b'], 6, seeded(2)).length, 2);
+  assert.deepEqual(pickDancers([], 4, seeded(3)), []);
+});
+
+test('leaves the caller list alone', () => {
+  const keys = ['a', 'b', 'c', 'd'];
+  pickDancers(keys, 2, seeded(4));
+  assert.deepEqual(keys, ['a', 'b', 'c', 'd']);
+});
+
+test('spreads the picks around rather than favouring the same shapes', () => {
+  const keys = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const rand = seeded(6);
+  const seen = new Set();
+  for (let t = 0; t < 40; t++) for (const k of pickDancers(keys, 2, rand)) seen.add(k);
+  assert.equal(seen.size, keys.length);
 });
 
 test('the drift actually roams rather than sitting still', () => {

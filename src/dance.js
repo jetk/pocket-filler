@@ -37,6 +37,18 @@ export function pickMoves(nodes, count, cols, rows, rand = Math.random) {
 // to the leash, so a shape drifts a little way around its resting place and
 // stays there. Clamping rather than refusing means a shape that reaches the end
 // of its leash slides along it instead of sticking to the corner.
+// Which shapes step this tick. Same partial Fisher-Yates as pickMoves: a fair
+// sample without paying to shuffle the whole list.
+export function pickDancers(keys, count, rand = Math.random) {
+  const pool = [...keys];
+  const n = Math.min(count, pool.length);
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor(rand() * (pool.length - i));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, n);
+}
+
 export function wander([dx, dy], leash, rand = Math.random) {
   const [sx, sy] = DIRS[Math.floor(rand() * DIRS.length)];
   // The `+ 0` is not a no-op: clamping a negative step against a zero leash

@@ -1,6 +1,6 @@
 import { computeFaces, faceAt } from './planar.js';
 import { encode, decode, decodeLegacy } from './codec.js';
-import { pickMoves, wander } from './dance.js';
+import { pickMoves, pickDancers, wander } from './dance.js';
 import { shapeNodes, translate, applyMoves } from './shapes.js';
 
 // px per grid unit. Nominally 1 cm (96 CSS px per inch), but CSS px drift from
@@ -16,6 +16,7 @@ const STORE = 'pocket-filler';
 // `dots` is a view preference, not part of the drawing: it persists locally but
 // stays out of the share codec, so a link never imposes your grid on someone else.
 const state = { lines: [], fills: {}, mode: 'draw', color: 0, chain: null, dots: true };
+const MODES = ['draw', 'fill', 'move'];
 
 const canvas = document.getElementById('sheet');
 const ctx = canvas.getContext('2d');
@@ -379,21 +380,17 @@ PALETTE.forEach((c, i) => {
   swatches.append(b);
 });
 
-// One button per mode rather than a cycle: with three of them the label you
-// want is always one tap away, and the pressed state says where you are
-// without having to read it.
-const modeBtns = [...document.querySelectorAll('.mode')];
-for (const b of modeBtns) {
-  b.onclick = () => {
-    stopDance();
-    state.mode = b.dataset.mode;
-    for (const other of modeBtns) other.setAttribute('aria-pressed', String(other === b));
-    state.chain = null;
-    hover = null;
-    drag = null;
-    draw();
-  };
-}
+const modeBtn = document.getElementById('mode');
+modeBtn.onclick = () => {
+  stopDance();
+  state.mode = MODES[(MODES.indexOf(state.mode) + 1) % MODES.length];
+  modeBtn.dataset.mode = state.mode;
+  modeBtn.textContent = state.mode[0].toUpperCase() + state.mode.slice(1);
+  state.chain = null;
+  hover = null;
+  drag = null;
+  draw();
+};
 
 const dotsBtn = document.getElementById('dots');
 function paintDotsBtn() {
@@ -431,16 +428,27 @@ const danceBar = document.getElementById('dancebar');
 const shapeBar = document.getElementById('shapebar');
 const dancers = document.getElementById('dancers');
 const dancerCount = document.getElementById('dancercount');
-const roam = document.getElementById('roam');
-const roamCount = document.getElementById('roamcount');
+const movers = document.getElementById('movers');
+const moverCount = document.getElementById('movercount');
 
-// Two dances, one contract: every tick starts from the resting drawing rather
-// than from the last tick, so the drawing moves around its original instead of
-// wandering off, and stopping is the same restore the tick already does.
+// How far from home a shape may drift. Fixed rather than exposed: the slider
+// is better spent on how many shapes move, which is what costs anything.
+const LEASH = 2;
+
+// Two dances. Both return the drawing exactly as they found it, but they get
+// there differently, because what they move differs.
 //
-// What differs is the unit. The point dance picks loose nodes and nudges them,
-// which pulls the lines out of shape. The shape dance moves a whole filled
-// pocket at a time, so the shape holds its form and the web around it gives.
+// The point dance picks loose nodes and nudges them, pulling the lines out of
+// shape. It re-derives from the resting drawing every tick, which is what keeps
+// a random walk from carrying the drawing away.
+//
+// The shape dance moves a whole filled pocket at a time, so the shape holds its
+// form and the web around it gives. It can't re-derive from rest each tick: that
+// would mean re-applying every shape's offset every time, so the cost would
+// track how many shapes exist rather than how many are moving, and the Movers
+// slider would buy nothing. Instead each shape carries an offset that never
+// leaves the leash, so it stays near home by construction, and stopping restores
+// the resting drawing outright.
 const KINDS = {
   point: { btn: danceBtn, bar: danceBar, cls: 'dancing' },
   shape: { btn: shapeBtn, bar: shapeBar, cls: 'dancing-shapes' },
@@ -454,18 +462,18 @@ function danceTick() {
   draw();
 }
 
-// Offsets are per shape and measured from rest, so they can be re-applied to the
-// restored drawing every tick. A step the guard refuses leaves the shape on its
-// last good offset rather than snapping home for a frame.
+// Only the shapes picked this tick are touched; the rest are already where they
+// belong, so they cost nothing. The recorded offset only advances on a step the
+// guard allowed, which keeps it honest about where the shape actually is.
 function shapeTick() {
-  state.lines = JSON.parse(dance.resting);
-  facesStale = true;
-  const leash = +roam.value;
-  for (const s of shapes()) {
-    const prev = dance.offsets.get(s.key) || [0, 0];
-    const next = wander(prev, leash);
-    if (moveShape(s.key, next)) dance.offsets.set(s.key, next);
-    else moveShape(s.key, prev);
+  const all = shapes();
+  const moving = new Set(pickDancers(all.map((s) => s.key), +movers.value));
+  for (const s of all) {
+    if (!moving.has(s.key)) continue;
+    const from = dance.offsets.get(s.key) || [0, 0];
+    const to = wander(from, LEASH);
+    const step = [to[0] - from[0], to[1] - from[1]];
+    if ((step[0] || step[1]) && moveShape(s.key, step)) dance.offsets.set(s.key, to);
   }
   draw();
 }
@@ -516,8 +524,10 @@ dancers.oninput = () => {
   dancerCount.textContent = dancers.value;
   if (dance?.kind === 'point') danceTick();
 };
-roam.oninput = () => {
-  roamCount.textContent = roam.value;
+// No re-tick on input: the count applies from the next tick, and forcing one
+// here would step shapes every time the slider twitched.
+movers.oninput = () => {
+  moverCount.textContent = movers.value;
 };
 
 // Two taps to clear, rather than confirm() — embedded webviews suppress or hang
