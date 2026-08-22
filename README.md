@@ -62,6 +62,12 @@ Not every corner of a pocket can be carried. A boundary corner that is a crossin
 
 - `src/planar.js` — segments in, enclosed faces out. Pure geometry, no DOM.
 - `src/shapes.js` — which nodes a pocket owns, and moving a set of them at once. Pure.
-- `src/app.js` — state, input, rendering, persistence.
+- `src/codec.js` — drawing to and from the URL fragment. Pure.
+- `src/dance.js` — which nodes step where on a dance tick, and which shapes drift. Pure.
+- `src/app.js` — state, input, rendering, persistence, toolbar.
 
 Lines are the only source of truth; pockets are recomputed from them on every change. That's also the seam for animation later: move endpoints, re-derive.
+
+---
+
+[CLAUDE.md](CLAUDE.md) carries the design rationale, invariants and open threads — read that before changing the code.
