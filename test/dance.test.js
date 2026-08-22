@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickMoves } from '../src/dance.js';
+import { pickMoves, wander } from '../src/dance.js';
 
 // deterministic stand-in for Math.random
 const seeded = (seed) => () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
@@ -63,4 +63,43 @@ test('picks a different set from tick to tick', () => {
   const a = JSON.stringify(pickMoves(grid(4, 4, 3), 4, 20, 20, seeded(11)));
   const b = JSON.stringify(pickMoves(grid(4, 4, 3), 4, 20, 20, seeded(12)));
   assert.notEqual(a, b);
+});
+
+// --- shape dance: one offset per shape, wandering on a leash ---------------
+
+test('a drifting shape never leaves its leash', () => {
+  for (let s = 0; s < 20; s++) {
+    const rand = seeded(s + 1);
+    let off = [0, 0];
+    for (let t = 0; t < 200; t++) {
+      off = wander(off, 2, rand);
+      assert.ok(Math.abs(off[0]) <= 2 && Math.abs(off[1]) <= 2, `escaped: ${off}`);
+    }
+  }
+});
+
+test('each tick drifts by at most one grid unit per axis', () => {
+  const rand = seeded(5);
+  let off = [0, 0];
+  for (let t = 0; t < 200; t++) {
+    const next = wander(off, 3, rand);
+    assert.ok(Math.abs(next[0] - off[0]) <= 1 && Math.abs(next[1] - off[1]) <= 1,
+      `jumped ${off} -> ${next}`);
+    off = next;
+  }
+});
+
+test('a leash of zero pins the shape at rest', () => {
+  const rand = seeded(9);
+  let off = [0, 0];
+  for (let t = 0; t < 30; t++) off = wander(off, 0, rand);
+  assert.deepEqual(off, [0, 0]);
+});
+
+test('the drift actually roams rather than sitting still', () => {
+  const rand = seeded(13);
+  let off = [0, 0];
+  const seen = new Set();
+  for (let t = 0; t < 200; t++) { off = wander(off, 2, rand); seen.add(off.join(',')); }
+  assert.ok(seen.size > 8, `only reached ${seen.size} offsets`);
 });

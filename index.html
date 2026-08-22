@@ -25,11 +25,15 @@
   body { display: flex; flex-direction: column; }
   #sheet { flex: 1; display: block; width: 100%; touch-action: none; }
 
+  /* Two levels: what the tap does on top, everything else below. Both rows
+     centre, so the reach is the same wherever the thumb is. */
   #bar {
-    display: flex; align-items: center; gap: 6px;
+    display: flex; flex-direction: column; gap: 6px;
     padding: 6px calc(6px + env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom));
     background: var(--chrome); border-top: 1px solid var(--edge);
   }
+  .row { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; }
+  .row.modes { gap: 4px; }
   button {
     font: inherit; color: var(--ink); background: var(--paper);
     border: 1px solid var(--edge); border-radius: 8px;
@@ -37,13 +41,18 @@
     display: grid; place-items: center;
   }
   button:active { background: var(--edge); }
-  #mode { min-width: 56px; }
-  #mode[data-mode="fill"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-  #mode[data-mode="move"] { background: #2f6fb3; color: #fff; border-color: #2f6fb3; }
+  .mode { min-width: 64px; }
+  .mode[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  /* Move keeps its own colour: it's the mode where the node handles appear. */
+  .mode[data-mode="move"][aria-pressed="true"] { background: #2f6fb3; border-color: #2f6fb3; }
   button.armed { background: #c0392b; color: #fff; border-color: #c0392b; }
+  /* Dots off is a quieter sheet, so the button goes quiet with it. */
+  #dots[aria-pressed="false"] { color: #a49d91; }
 
+  /* Clears the two-level bar (36 + 36 + gap + padding), as 60px cleared the
+     single row it replaced. */
   #toast {
-    position: fixed; left: 12px; right: 12px; bottom: 60px;
+    position: fixed; left: 12px; right: 12px; bottom: 104px;
     padding: 10px 12px; border-radius: 8px;
     background: var(--ink); color: var(--paper);
     line-height: 1.35; text-align: center;
@@ -52,40 +61,73 @@
   }
   #toast.show { opacity: 1; transform: none; }
 
+  /* The two dances get their own colour so it's never ambiguous which is
+     running: violet nudges points, teal drifts whole shapes. */
   button.dancing { background: #7a4fbf; color: #fff; border-color: #7a4fbf; }
+  button.dancing-shapes { background: #1f8a80; color: #fff; border-color: #1f8a80; }
 
-  #dancebar {
-    position: fixed; left: 12px; right: 12px; bottom: 60px;
+  .dancebar {
+    position: fixed; left: 12px; right: 12px; bottom: 104px;
     display: flex; align-items: center; gap: 10px;
     padding: 8px 12px; border-radius: 8px;
     background: var(--chrome); border: 1px solid var(--edge);
   }
-  #dancebar[hidden] { display: none; }
-  #dancebar input { flex: 1; min-width: 0; accent-color: #7a4fbf; height: 28px; }
-  #dancebar output { min-width: 1.5em; text-align: right; font-variant-numeric: tabular-nums; }
-  #swatches { display: flex; gap: 4px; flex: 1; min-width: 0; justify-content: center; }
+  .dancebar[hidden] { display: none; }
+  .dancebar input { flex: 1; min-width: 0; height: 28px; }
+  #dancebar input { accent-color: #7a4fbf; }
+  #shapebar input { accent-color: #1f8a80; }
+  .dancebar output { min-width: 1.5em; text-align: right; font-variant-numeric: tabular-nums; }
+  /* The strip keeps its size and the row wraps around it, rather than the
+     swatches shrinking to slivers to keep everything on one line. */
+  #swatches { display: flex; gap: 4px; flex: none; justify-content: center; }
+  /* min-width beats the 34px every button gets; without it the dabs inflate
+     to button size and shove the row onto a third line. */
   .swatch {
-    flex: 0 1 26px; height: 26px; min-width: 0; padding: 0;
+    flex: none; width: 26px; min-width: 0; height: 26px; padding: 0;
     border-radius: 50%; border: 2px solid transparent;
   }
   .swatch[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.12); }
+
+  /* Two levels has to hold on a phone, which is where this app lives, so the
+     second row tightens rather than wrapping onto a third. */
+  @media (max-width: 430px) {
+    .row { gap: 3px; }
+    /* Only the tool row tightens — an id selector here would outrank both
+       `.mode` and `.swatch` and quietly undo their sizes. */
+    .row:not(.modes) button { min-width: 28px; padding: 0 2px; }
+    #swatches { gap: 3px; }
+    #swatches .swatch { width: 21px; min-width: 0; height: 21px; }
+  }
 </style>
 </head>
 <body>
   <canvas id="sheet"></canvas>
   <div id="toast" role="status" aria-live="polite"></div>
-  <div id="dancebar" hidden>
+  <div id="dancebar" class="dancebar" hidden>
     <label for="dancers">Dancers</label>
     <input id="dancers" type="range" min="1" max="12" value="3">
     <output id="dancercount" for="dancers">3</output>
   </div>
+  <div id="shapebar" class="dancebar" hidden>
+    <label for="roam">Roam</label>
+    <input id="roam" type="range" min="1" max="4" value="2">
+    <output id="roamcount" for="roam">2</output>
+  </div>
   <div id="bar">
-    <button id="mode" data-mode="draw" title="Toggle draw / fill">Draw</button>
-    <div id="swatches"></div>
-    <button id="dance" title="Dance: nudge random nodes about">&#9834;</button>
-    <button id="undo" title="Undo last line">&#8630;</button>
-    <button id="clear" title="Clear everything">&#10005;</button>
-    <button id="share" title="Copy a link to this drawing">&#8599;</button>
+    <div class="row modes">
+      <button class="mode" data-mode="draw" aria-pressed="true">Draw</button>
+      <button class="mode" data-mode="fill" aria-pressed="false">Fill</button>
+      <button class="mode" data-mode="move" aria-pressed="false">Move</button>
+    </div>
+    <div class="row">
+      <div id="swatches"></div>
+      <button id="dance" aria-pressed="false" title="Point dance: nudge individual nodes about">&#9834;</button>
+      <button id="shapedance" aria-pressed="false" title="Shape dance: drift whole filled shapes">&#9670;</button>
+      <button id="dots" aria-pressed="true" title="Hide the dot grid">&#8759;</button>
+      <button id="undo" title="Undo last line">&#8630;</button>
+      <button id="clear" title="Clear everything">&#10005;</button>
+      <button id="share" title="Copy a link to this drawing">&#8599;</button>
+    </div>
   </div>
   <script type="module" src="./src/app.js"></script>
 </body>

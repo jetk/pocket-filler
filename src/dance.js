@@ -32,6 +32,19 @@ export function pickMoves(nodes, count, cols, rows, rand = Math.random) {
   return moves;
 }
 
+// Shape dance keeps one offset per shape instead of per node, and that offset
+// wanders rather than jumps: a tick steps it at most one grid unit and clamps it
+// to the leash, so a shape drifts a little way around its resting place and
+// stays there. Clamping rather than refusing means a shape that reaches the end
+// of its leash slides along it instead of sticking to the corner.
+export function wander([dx, dy], leash, rand = Math.random) {
+  const [sx, sy] = DIRS[Math.floor(rand() * DIRS.length)];
+  // The `+ 0` is not a no-op: clamping a negative step against a zero leash
+  // yields -0, which is harmless to add to a coordinate but ugly to store.
+  const clamp = (v) => Math.max(-leash, Math.min(leash, v)) + 0;
+  return [clamp(dx + sx), clamp(dy + sy)];
+}
+
 function shuffled(arr, rand) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {

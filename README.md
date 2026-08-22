@@ -16,12 +16,17 @@ node --test test/*.test.js
 
 ## Controls
 
-The mode button cycles **Draw → Fill → Move**.
+The bar has two levels: what a tap does on top, everything else below.
 
 - **Draw** — tap a node to start. Each further node extends the chain. Tap the node you're on to finish; if you haven't drawn a segment yet, that cancels. Tap the first node once two or more segments exist to close the loop.
 - **Fill** — pick a swatch, tap a pocket. Tapping it again with the same color clears it.
 - **Move** — drag any node; every line meeting it follows, snapping node to node. Fills stay with their pocket.
-- **♪ Dance** — nudges random nodes one position in a random direction, a few times a second. The slider sets how many move at once. Each tick is offset from the resting drawing rather than the previous tick, so the shape wobbles in place instead of wandering off, and switching it off restores the original exactly. Canvas edits are ignored while it runs; the other buttons stop it first.
+
+Both dances measure every tick from the resting drawing rather than the previous tick, so the drawing moves around its original instead of wandering off, and switching one off restores it exactly. Canvas edits are ignored while either runs, and the other buttons stop them first. Only one can run at a time.
+
+- **♪ Point dance** (violet) — nudges random *nodes* one position in a random direction, a few times a second, pulling the lines out of shape as it goes. The slider sets how many move at once.
+- **◆ Shape dance** (teal) — drifts whole *filled pockets* instead, so each shape keeps its form and the lines merely attached to it stretch. The slider sets the leash: how far from home a shape may roam. Needs at least one filled pocket, and says so if there isn't one.
+- **∷ Dots** shows and hides the dot grid. The grid still snaps when hidden — it's only the dots that go. Saved locally, and deliberately left out of shared links so a link never imposes your grid on someone else.
 - **Undo** steps back through draws, fills, moves and clears — a whole drag counts as one. **Share** puts the drawing in the URL and copies the link. Everything autosaves locally.
 
 ## Driving it from the console

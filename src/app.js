@@ -1,6 +1,6 @@
 import { computeFaces, faceAt } from './planar.js';
 import { encode, decode, decodeLegacy } from './codec.js';
-import { pickMoves } from './dance.js';
+import { pickMoves, wander } from './dance.js';
 import { shapeNodes, translate, applyMoves } from './shapes.js';
 
 // px per grid unit. Nominally 1 cm (96 CSS px per inch), but CSS px drift from
@@ -13,8 +13,9 @@ const STORE = 'pocket-filler';
 
 // lines: [ax, ay, bx, by] in grid units; the array index is the line's id, which
 // is what face keys are built from — so ordering must stay stable.
-const state = { lines: [], fills: {}, mode: 'draw', color: 0, chain: null };
-const MODES = ['draw', 'fill', 'move'];
+// `dots` is a view preference, not part of the drawing: it persists locally but
+// stays out of the share codec, so a link never imposes your grid on someone else.
+const state = { lines: [], fills: {}, mode: 'draw', color: 0, chain: null, dots: true };
 
 const canvas = document.getElementById('sheet');
 const ctx = canvas.getContext('2d');
@@ -138,12 +139,15 @@ function render() {
     ctx.fill();
   }
 
-  ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--dot');
-  for (let i = 0; i < cols; i++) {
-    for (let j = 0; j < rows; j++) {
-      ctx.beginPath();
-      ctx.arc(ox + i * CM, oy + j * CM, 1.6, 0, Math.PI * 2);
-      ctx.fill();
+  // Dots off is just a quieter sheet — the grid still snaps, it's only hidden.
+  if (state.dots) {
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--dot');
+    for (let i = 0; i < cols; i++) {
+      for (let j = 0; j < rows; j++) {
+        ctx.beginPath();
+        ctx.arc(ox + i * CM, oy + j * CM, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 
@@ -309,27 +313,29 @@ canvas.addEventListener('pointercancel', () => {
 
 // --- persistence -----------------------------------------------------------
 
+const toastEl = document.getElementById('toast');
 let toastTimer = 0;
 function toast(msg) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 4000);
 }
 
 let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    try { localStorage.setItem(STORE, JSON.stringify({ l: state.lines, f: state.fills })); } catch {}
+    try {
+      localStorage.setItem(STORE, JSON.stringify({ l: state.lines, f: state.fills, d: state.dots }));
+    } catch {}
   }, 250);
 }
 
 function fromLocal() {
   try {
     const j = JSON.parse(localStorage.getItem(STORE));
-    return Array.isArray(j?.l) ? { l: j.l, f: j.f || {} } : null;
+    return Array.isArray(j?.l) ? { l: j.l, f: j.f || {}, d: j.d } : null;
   } catch { return null; }
 }
 
@@ -353,6 +359,7 @@ function load() {
   if (!src) return;
   state.lines = src.l;
   state.fills = src.f;
+  state.dots = src.d !== false;   // a shared link carries no preference; dots stay on
   facesStale = true;
 }
 
@@ -372,15 +379,32 @@ PALETTE.forEach((c, i) => {
   swatches.append(b);
 });
 
-const modeBtn = document.getElementById('mode');
-modeBtn.onclick = () => {
-  stopDance();
-  state.mode = MODES[(MODES.indexOf(state.mode) + 1) % MODES.length];
-  modeBtn.dataset.mode = state.mode;
-  modeBtn.textContent = state.mode[0].toUpperCase() + state.mode.slice(1);
-  state.chain = null;
-  hover = null;
-  drag = null;
+// One button per mode rather than a cycle: with three of them the label you
+// want is always one tap away, and the pressed state says where you are
+// without having to read it.
+const modeBtns = [...document.querySelectorAll('.mode')];
+for (const b of modeBtns) {
+  b.onclick = () => {
+    stopDance();
+    state.mode = b.dataset.mode;
+    for (const other of modeBtns) other.setAttribute('aria-pressed', String(other === b));
+    state.chain = null;
+    hover = null;
+    drag = null;
+    draw();
+  };
+}
+
+const dotsBtn = document.getElementById('dots');
+function paintDotsBtn() {
+  dotsBtn.setAttribute('aria-pressed', String(state.dots));
+  dotsBtn.title = state.dots ? 'Hide the dot grid' : 'Show the dot grid';
+}
+// Safe to toggle mid-dance: it changes what's painted, never the drawing.
+dotsBtn.onclick = () => {
+  state.dots = !state.dots;
+  paintDotsBtn();
+  save();
   draw();
 };
 
@@ -402,13 +426,26 @@ document.getElementById('undo').onclick = () => { stopDance(); undo(); };
 
 const TICK = 350;   // jerky on purpose for now
 const danceBtn = document.getElementById('dance');
+const shapeBtn = document.getElementById('shapedance');
 const danceBar = document.getElementById('dancebar');
+const shapeBar = document.getElementById('shapebar');
 const dancers = document.getElementById('dancers');
 const dancerCount = document.getElementById('dancercount');
+const roam = document.getElementById('roam');
+const roamCount = document.getElementById('roamcount');
 
-// Every tick starts from the resting drawing rather than from the last tick, so
-// the shape wobbles around its original instead of wandering off — and stopping
-// is the same restore the tick already does.
+// Two dances, one contract: every tick starts from the resting drawing rather
+// than from the last tick, so the drawing moves around its original instead of
+// wandering off, and stopping is the same restore the tick already does.
+//
+// What differs is the unit. The point dance picks loose nodes and nudges them,
+// which pulls the lines out of shape. The shape dance moves a whole filled
+// pocket at a time, so the shape holds its form and the web around it gives.
+const KINDS = {
+  point: { btn: danceBtn, bar: danceBar, cls: 'dancing' },
+  shape: { btn: shapeBtn, bar: shapeBar, cls: 'dancing-shapes' },
+};
+
 function danceTick() {
   state.lines = JSON.parse(dance.resting);
   const nodes = [...occupiedNodes()].map((k) => k.split(',').map(Number));
@@ -417,31 +454,70 @@ function danceTick() {
   draw();
 }
 
-function startDance() {
+// Offsets are per shape and measured from rest, so they can be re-applied to the
+// restored drawing every tick. A step the guard refuses leaves the shape on its
+// last good offset rather than snapping home for a frame.
+function shapeTick() {
+  state.lines = JSON.parse(dance.resting);
+  facesStale = true;
+  const leash = +roam.value;
+  for (const s of shapes()) {
+    const prev = dance.offsets.get(s.key) || [0, 0];
+    const next = wander(prev, leash);
+    if (moveShape(s.key, next)) dance.offsets.set(s.key, next);
+    else moveShape(s.key, prev);
+  }
+  draw();
+}
+
+function startDance(kind) {
   if (dance || !state.lines.length) return;
-  dance = { resting: JSON.stringify(state.lines), timer: setInterval(danceTick, TICK) };
-  danceBtn.classList.add('dancing');
-  danceBar.hidden = false;
+  // Shape dance has nothing to move until something is colored, and silently
+  // doing nothing would read as a broken button.
+  if (kind === 'shape' && !shapes().length) {
+    return toast('Shape dance moves filled pockets — fill one first.');
+  }
+  const { btn, bar, cls } = KINDS[kind];
+  toastEl.classList.remove('show');   // the bar lands where the toast sits
+  dance = { kind, resting: JSON.stringify(state.lines), offsets: new Map(), timer: 0 };
+  dance.timer = setInterval(kind === 'shape' ? shapeTick : danceTick, TICK);
+  btn.classList.add(cls);
+  btn.setAttribute('aria-pressed', 'true');
+  bar.hidden = false;
   state.chain = null;
   drag = null;
-  danceTick();
+  (kind === 'shape' ? shapeTick : danceTick)();
 }
 
 function stopDance() {
   if (!dance) return;
+  const { btn, bar, cls } = KINDS[dance.kind];
   clearInterval(dance.timer);
   state.lines = JSON.parse(dance.resting);   // snap back to where it started
   dance = null;
-  danceBtn.classList.remove('dancing');
-  danceBar.hidden = true;
+  btn.classList.remove(cls);
+  btn.setAttribute('aria-pressed', 'false');
+  bar.hidden = true;
   facesStale = true;
   draw();
 }
 
-danceBtn.onclick = () => (dance ? stopDance() : startDance());
+// Starting one dance stops the other: they both own every node, so running both
+// would have each fighting the other's restore.
+const toggle = (kind) => () => {
+  const running = dance?.kind;
+  stopDance();
+  if (running !== kind) startDance(kind);
+};
+danceBtn.onclick = toggle('point');
+shapeBtn.onclick = toggle('shape');
+
 dancers.oninput = () => {
   dancerCount.textContent = dancers.value;
-  if (dance) danceTick();
+  if (dance?.kind === 'point') danceTick();
+};
+roam.oninput = () => {
+  roamCount.textContent = roam.value;
 };
 
 // Two taps to clear, rather than confirm() — embedded webviews suppress or hang
@@ -521,4 +597,5 @@ window.pf = {
 
 new ResizeObserver(resize).observe(canvas);
 load();
+paintDotsBtn();
 resize();
