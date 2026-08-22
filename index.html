@@ -65,17 +65,24 @@
   button.dancing { background: #7a4fbf; color: #fff; border-color: #7a4fbf; }
   button.dancing-shapes { background: #1f8a80; color: #fff; border-color: #1f8a80; }
 
+  /* A pill that hugs its contents rather than a full-width shelf: it floats
+     over the drawing for as long as a dance runs, so it should hide as little
+     of it as possible. Slightly see-through for the same reason. */
   .dancebar {
-    position: fixed; left: 12px; right: 12px; bottom: 104px;
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 12px; border-radius: 8px;
-    background: var(--chrome); border: 1px solid var(--edge);
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 98px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 12px;
+    background: rgba(239, 236, 230, .92);
+    border: 1px solid var(--edge);
+    box-shadow: 0 1px 3px rgba(42, 38, 34, .1);
   }
   .dancebar[hidden] { display: none; }
-  .dancebar input { flex: 1; min-width: 0; height: 28px; }
+  .dancebar label { opacity: .7; }
+  .dancebar input { width: 88px; height: 18px; margin: 0; }
   #dancebar input { accent-color: #7a4fbf; }
   #shapebar input { accent-color: #1f8a80; }
-  .dancebar output { min-width: 1.5em; text-align: right; font-variant-numeric: tabular-nums; }
+  .dancebar output { min-width: 1.1em; text-align: right; font-variant-numeric: tabular-nums; }
   /* The strip keeps its size and the row wraps around it, rather than the
      swatches shrinking to slivers to keep everything on one line. */
   #swatches { display: flex; gap: 4px; flex: none; justify-content: center; }
