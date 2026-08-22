@@ -123,7 +123,7 @@ node --test 'test/*.test.js'
 python3 -m http.server 8000
 ```
 
-42 tests, all in node with `assert` — no framework, no fixtures. The geometry,
+41 tests, all in node with `assert` — no framework, no fixtures. The geometry,
 codec, shape extraction and choreography are covered; rendering and input are
 not. Non-trivial
 logic should leave one runnable check behind.
