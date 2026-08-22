@@ -333,8 +333,13 @@ let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    // Never write a danced frame. While a dance runs, state.lines holds a
+    // displaced drawing that the snap-back is about to throw away, so writing it
+    // would leave disk disagreeing with the screen and hand back the wobble on
+    // the next load. The resting copy is what the user actually drew.
+    const l = dance ? JSON.parse(dance.resting) : state.lines;
     try {
-      localStorage.setItem(STORE, JSON.stringify({ l: state.lines, f: state.fills, d: state.dots }));
+      localStorage.setItem(STORE, JSON.stringify({ l, f: state.fills, d: state.dots }));
     } catch {}
   }, 250);
 }
@@ -403,7 +408,8 @@ function paintDotsBtn() {
   dotsBtn.setAttribute('aria-pressed', String(state.dots));
   dotsBtn.title = state.dots ? 'Hide the dot grid' : 'Show the dot grid';
 }
-// Safe to toggle mid-dance: it changes what's painted, never the drawing.
+// Fine to toggle mid-dance: it changes what's painted, never the drawing, and
+// save() knows to write the resting copy rather than the frame on screen.
 dotsBtn.onclick = () => {
   state.dots = !state.dots;
   paintDotsBtn();
