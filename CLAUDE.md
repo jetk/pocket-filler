@@ -66,7 +66,8 @@ that way; `app.js` is the only file that touches the document.
 state = {
   lines: [[ax, ay, bx, by], ...],  // grid units; array index IS the line id
   fills: { [faceKey]: colorIndex },
-  mode, color, chain
+  palette: ['#rrggbb', ...6],      // colorIndex indexes this
+  mode, color, chain, dots
 }
 ```
 
@@ -89,12 +90,27 @@ call is deliberately the same one an animation frame will make.
    round-trip. Fractional coordinates require widening coords to two chars.
 4. **Face keys must stay derivable from line ids**, or fills stop surviving
    moves and animation.
+5. **A fill is an index, not a color.** `palette` therefore travels with the
+   drawing — saved locally *and* carried in the share link — or a shared
+   drawing arrives in whatever colors the recipient happens to have. `dots`
+   goes the other way: a view preference, local only. The palette is a fourth,
+   optional section on the fragment, appended only when it differs from the
+   stock one, so links written before it existed still decode and links on the
+   default colors are no longer than they were.
 
 ## Traps
 
 - **No `confirm()`, `alert()`, or any modal.** Embedded webviews — including the
   Claude desktop app's browser pane — suppress or hang on them. Clear silently
   did nothing until it became two-tap arming. Use the toast or in-button state.
+  The one OS-level surface in the app is `<input type="color">` behind
+  `editColor()`, chosen because it is free, native and familiar on a phone. It
+  is the same family of risk: if it turns out to be suppressed in a webview,
+  that single call site is what an in-page picker would replace.
+- **Anything painted from state must be repainted after `load()`.** The toolbar
+  is built at module scope, so a palette arriving from a link or from disk
+  reached the fills but not the swatches until `paintSwatches()` moved below
+  `load()`. Same for `paintDotsBtn()`.
 - **`computeFaces` is O(n²) in crossings.** A real 69-line drawing with 35
   pockets costs ~4 ms; a dense 150-line tangle with 1342 pockets costs ~174 ms.
   Fine for edits, a ceiling for per-frame animation.
@@ -123,7 +139,7 @@ node --test 'test/*.test.js'
 python3 -m http.server 8000
 ```
 
-41 tests, all in node with `assert` — no framework, no fixtures. The geometry,
+48 tests, all in node with `assert` — no framework, no fixtures. The geometry,
 codec, shape extraction and choreography are covered; rendering and input are
 not. Non-trivial
 logic should leave one runnable check behind.

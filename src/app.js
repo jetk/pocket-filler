@@ -11,11 +11,27 @@ const SNAP = 0.45;         // tap-to-node radius, in grid units
 const PALETTE = ['#e0655c', '#ec9c46', '#e8c84e', '#68b877', '#579fd8', '#a077cc'];
 const STORE = 'pocket-filler';
 
+// The sheet's colors live in index.html so there's one place to change them.
+// Read once a frame rather than per shape — the same call the dots already made.
+const theme = { ink: '#222222', paper: '#ffffff', dot: '#c9c9c9' };
+function readTheme() {
+  const s = getComputedStyle(document.body);
+  for (const k of Object.keys(theme)) {
+    const v = s.getPropertyValue(`--${k}`).trim();
+    if (v) theme[k] = v;
+  }
+}
+
 // lines: [ax, ay, bx, by] in grid units; the array index is the line's id, which
 // is what face keys are built from — so ordering must stay stable.
 // `dots` is a view preference, not part of the drawing: it persists locally but
 // stays out of the share codec, so a link never imposes your grid on someone else.
-const state = { lines: [], fills: {}, mode: 'draw', color: 0, chain: null, dots: true };
+// `palette` goes the other way — fills store an index into it, so a drawing
+// shared without its palette would arrive in somebody else's colors.
+const state = {
+  lines: [], fills: {}, mode: 'draw', color: 0, chain: null,
+  dots: true, palette: [...PALETTE],
+};
 const MODES = ['draw', 'fill', 'move'];
 
 const canvas = document.getElementById('sheet');
@@ -136,7 +152,7 @@ function render() {
   for (const f of getFaces()) {
     const c = state.fills[f.key];
     if (c === undefined) continue;
-    ctx.fillStyle = PALETTE[c];
+    ctx.fillStyle = state.palette[c];
     ctx.beginPath();
     f.pts.forEach(([x, y], i) => {
       const [px, py] = toPx(x, y);
@@ -148,7 +164,7 @@ function render() {
 
   // Dots off is just a quieter sheet — the grid still snaps, it's only hidden.
   if (state.dots) {
-    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--dot');
+    ctx.fillStyle = theme.dot;
     for (let i = 0; i < cols; i++) {
       for (let j = 0; j < rows; j++) {
         ctx.beginPath();
@@ -158,7 +174,7 @@ function render() {
     }
   }
 
-  ctx.strokeStyle = '#2a2622';
+  ctx.strokeStyle = theme.ink;
   ctx.lineWidth = 2;
   ctx.lineCap = 'round';
   ctx.beginPath();
@@ -175,10 +191,10 @@ function render() {
       const [x, y] = toPx(gx, gy);
       ctx.beginPath();
       ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fillStyle = '#faf8f4';
+      ctx.fillStyle = theme.paper;
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = '#2a2622';
+      ctx.strokeStyle = theme.ink;
       ctx.stroke();
     }
     if (drag) ring(drag.at, '#c0392b', true);
@@ -189,15 +205,15 @@ function render() {
     if (hover && !same(hover, last)) {
       ctx.save();
       ctx.setLineDash([4, 5]);
-      ctx.strokeStyle = '#2a262266';
+      ctx.strokeStyle = theme.ink + '66';
       ctx.beginPath();
       ctx.moveTo(...toPx(...last));
       ctx.lineTo(...toPx(...hover));
       ctx.stroke();
       ctx.restore();
     }
-    ring(last, '#2a2622', true);
-    if (state.chain.length >= 3) ring(first, '#2a2622', false);
+    ring(last, theme.ink, true);
+    if (state.chain.length >= 3) ring(first, theme.ink, false);
   }
 }
 
@@ -212,6 +228,7 @@ function ring([gx, gy], color, filled) {
 }
 
 function resize() {
+  readTheme();
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
   canvas.width = Math.round(w * dpr);
@@ -339,7 +356,7 @@ function save() {
     // the next load. The resting copy is what the user actually drew.
     const l = dance ? JSON.parse(dance.resting) : state.lines;
     try {
-      localStorage.setItem(STORE, JSON.stringify({ l, f: state.fills, d: state.dots }));
+      localStorage.setItem(STORE, JSON.stringify({ l, f: state.fills, d: state.dots, p: state.palette }));
     } catch {}
   }, 250);
 }
@@ -347,7 +364,7 @@ function save() {
 function fromLocal() {
   try {
     const j = JSON.parse(localStorage.getItem(STORE));
-    return Array.isArray(j?.l) ? { l: j.l, f: j.f || {}, d: j.d } : null;
+    return Array.isArray(j?.l) ? { l: j.l, f: j.f || {}, d: j.d, p: j.p } : null;
   } catch { return null; }
 }
 
@@ -372,24 +389,61 @@ function load() {
   state.lines = src.l;
   state.fills = src.f;
   state.dots = src.d !== false;   // a shared link carries no preference; dots stay on
+  // A link written before palettes existed, or one on the stock colors, carries
+  // no palette section — those drawings are meant to arrive in the defaults.
+  if (Array.isArray(src.p) && src.p.length === PALETTE.length) state.palette = src.p;
   facesStale = true;
 }
 
 // --- toolbar ---------------------------------------------------------------
 
 const swatches = document.getElementById('swatches');
+const picker = document.getElementById('picker');
+
+function paintSwatches() {
+  [...swatches.children].forEach((el, j) => {
+    el.style.background = state.palette[j];
+    el.setAttribute('aria-pressed', String(j === state.color));
+    el.title = j === state.color ? 'Tap again to change this color' : `Color ${j + 1}`;
+  });
+}
+
+// Tapping the swatch you're already on opens the OS color picker for it — the
+// same "tap it again to change it" idiom Fill already uses to clear a pocket,
+// so it costs no extra chrome in a bar that has none to spare.
+//
+// `type="color"` is the off-the-shelf choice on purpose: every browser has one,
+// it costs nothing to ship, and on a phone it's the picker the user already
+// knows. It does open an OS-level surface, which the embedded-webview trap in
+// CLAUDE.md warns about for modals — if it ever turns out to be suppressed
+// there, this is the one call site to swap for an in-page picker.
+function editColor(i) {
+  picker.value = state.palette[i];
+  picker.oninput = () => {
+    state.palette[i] = picker.value;
+    paintSwatches();
+    save();
+    draw();
+  };
+  try {
+    picker.showPicker();
+  } catch {
+    picker.click();       // older browsers, and anywhere showPicker is refused
+  }
+}
+
 PALETTE.forEach((c, i) => {
   const b = document.createElement('button');
   b.className = 'swatch';
-  b.style.background = c;
   b.setAttribute('aria-label', `Color ${i + 1}`);
-  b.setAttribute('aria-pressed', String(i === 0));
   b.onclick = () => {
+    if (state.color === i) return editColor(i);
     state.color = i;
-    [...swatches.children].forEach((el, j) => el.setAttribute('aria-pressed', String(i === j)));
+    paintSwatches();
   };
   swatches.append(b);
 });
+paintSwatches();
 
 const modeBtn = document.getElementById('mode');
 modeBtn.onclick = () => {
@@ -586,8 +640,9 @@ document.getElementById('share').onclick = async (e) => {
   const live = new Set(getFaces().map((f) => f.key));
   const f = Object.fromEntries(Object.entries(state.fills).filter(([k]) => live.has(k)));
 
+  const custom = state.palette.some((c, i) => c !== PALETTE[i]);
   try {
-    history.replaceState(null, '', '#' + encode({ l: state.lines, f }));
+    history.replaceState(null, '', '#' + encode({ l: state.lines, f, p: custom ? state.palette : undefined }));
   } catch (err) {
     return toast(err.message);
   }
@@ -619,5 +674,9 @@ window.pf = {
 
 new ResizeObserver(resize).observe(canvas);
 load();
+// Both of these paint from state, so they have to run after load() has had its
+// say — a drawing arriving with a custom palette needs it on the swatches too,
+// not just in the fills.
+paintSwatches();
 paintDotsBtn();
 resize();

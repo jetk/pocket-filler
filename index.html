@@ -8,11 +8,15 @@
 <title>Pocket Filler</title>
 <style>
   :root {
-    --paper: #faf8f4;
-    --ink: #2a2622;
-    --dot: #c6c0b4;
-    --chrome: #efece6;
-    --edge: #ddd8ce;
+    /* Pure white sheet. The greys around it are neutral to match — a warm
+       chrome against a white sheet reads as a mistake rather than a choice.
+       app.js reads --paper, --ink and --dot from here, so this block is the
+       one place the sheet's colours are set. */
+    --paper: #ffffff;
+    --ink: #222222;
+    --dot: #c9c9c9;
+    --chrome: #f2f2f2;
+    --edge: #dcdcdc;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -93,6 +97,13 @@
     border-radius: 50%; border: 2px solid transparent;
   }
   .swatch[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.12); }
+  /* The OS colour picker, parked next to the swatches so the popup opens near
+     them. Kept in flow at 1px rather than display:none, which would stop it
+     opening at all. */
+  #picker {
+    width: 1px; height: 1px; min-width: 0; padding: 0; margin: 0;
+    border: 0; opacity: 0; pointer-events: none;
+  }
 </style>
 </head>
 <body>
@@ -112,6 +123,7 @@
     <div class="row">
       <button id="mode" data-mode="draw" title="Toggle draw / fill / move">Draw</button>
       <div id="swatches"></div>
+      <input id="picker" type="color" tabindex="-1" aria-hidden="true">
     </div>
     <div class="row">
       <button id="dance" aria-pressed="false" title="Point dance: nudge individual nodes about">&#9834;</button>
