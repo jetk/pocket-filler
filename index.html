@@ -50,7 +50,7 @@
   #mode[data-mode="move"] { background: #2f6fb3; color: #fff; border-color: #2f6fb3; }
   button.armed { background: #c0392b; color: #fff; border-color: #c0392b; }
   /* Dots off is a quieter sheet, so the button goes quiet with it. */
-  #dots[aria-pressed="false"] { color: #a49d91; }
+  #dots[aria-pressed="false"] { color: #a0a0a0; }
 
   /* Clears the two-level bar (36 + 36 + gap + padding), as 60px cleared the
      single row it replaced. */
@@ -77,9 +77,13 @@
     display: flex; align-items: center; gap: 8px;
     padding: 3px 10px; border-radius: 999px;
     font-size: 12px;
-    background: rgba(239, 236, 230, .92);
+    /* Wants the chrome colour but see-through, so it's mixed from the same
+       variable rather than pinned to a copy of it that goes stale. The flat
+       rgba above it is the fallback where color-mix isn't understood. */
+    background: rgba(242, 242, 242, .92);
+    background: color-mix(in srgb, var(--chrome) 92%, transparent);
     border: 1px solid var(--edge);
-    box-shadow: 0 1px 3px rgba(42, 38, 34, .1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .1);
   }
   .dancebar[hidden] { display: none; }
   .dancebar label { opacity: .7; }
