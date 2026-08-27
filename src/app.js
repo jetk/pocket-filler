@@ -449,7 +449,7 @@ paintSwatches();
 function showPalette(on) {
   palettePanel.hidden = !on;
   editBtn.setAttribute('aria-pressed', String(on));
-  document.body.classList.toggle('editing-palette', on);
+  document.getElementById('dancebar').classList.toggle('stepped', on);
 }
 editBtn.onclick = () => showPalette(palettePanel.hidden);
 

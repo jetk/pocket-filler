@@ -119,7 +119,10 @@
     box-shadow: 0 1px 3px rgba(0, 0, 0, .1);
   }
   #palette[hidden] { display: none; }
-  body.editing-palette .dancebar { bottom: 150px; }
+  /* Carried on the pill itself rather than on the document root: the demo page
+     mirrors this stylesheet scoped inside a container, where a rule anchored
+     to the root silently never matches. */
+  .dancebar.stepped { bottom: 150px; }
   #pcells { display: flex; gap: 6px; }
   /* The browser's color input, wearing the same dab as the bar so the panel
      reads as the palette rather than as a form. */
