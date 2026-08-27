@@ -406,65 +406,59 @@ function load() {
 // --- toolbar ---------------------------------------------------------------
 
 const swatches = document.getElementById('swatches');
-const picker = document.getElementById('picker');
-
-// Perceived brightness, so the pencil sits legibly on whatever the user picked.
-function isLight(hex) {
-  const v = parseInt(hex.slice(1), 16);
-  return 0.299 * ((v >> 16) & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255) > 150;
-}
+const palettePanel = document.getElementById('palette');
+const pcells = document.getElementById('pcells');
+const editBtn = document.getElementById('editpalette');
 
 function paintSwatches() {
   [...swatches.children].forEach((el, j) => {
-    const on = j === state.color;
     el.style.background = state.palette[j];
-    el.setAttribute('aria-pressed', String(on));
-    // The selected swatch wears a pencil, because "tap the one you're already
-    // on" is invisible otherwise — the first person to use it asked where the
-    // palette was, and there was nothing on screen to answer them.
-    el.textContent = on ? '✎' : '';
-    el.style.color = on && !isLight(state.palette[j]) ? '#fff' : '#000';
-    el.title = on ? 'Change this color' : `Color ${j + 1}`;
-    el.setAttribute('aria-label', on ? `Color ${j + 1}, selected — tap to change it` : `Color ${j + 1}`);
+    el.setAttribute('aria-pressed', String(j === state.color));
   });
+  [...pcells.children].forEach((el, j) => { el.value = state.palette[j]; });
 }
 
-// Tapping the swatch you're already on opens the OS color picker for it — the
-// same "tap it again to change it" idiom Fill already uses to clear a pocket,
-// so it costs no extra chrome in a bar that has none to spare.
-//
-// `type="color"` is the off-the-shelf choice on purpose: every browser has one,
-// it costs nothing to ship, and on a phone it's the picker the user already
-// knows. It does open an OS-level surface, which the embedded-webview trap in
-// CLAUDE.md warns about for modals — if it ever turns out to be suppressed
-// there, this is the one call site to swap for an in-page picker.
-function editColor(i) {
-  picker.value = state.palette[i];
-  picker.oninput = () => {
-    state.palette[i] = picker.value;
-    paintSwatches();
-    save();
-    draw();
-  };
-  try {
-    picker.showPicker();
-  } catch {
-    picker.click();       // older browsers, and anywhere showPicker is refused
-  }
-}
-
+// A swatch only ever picks a color. Editing used to be a second tap on the
+// selected one, which was tidy and undiscoverable — the first person to use it
+// asked where the palette was. It lives behind its own button now.
 PALETTE.forEach((c, i) => {
   const b = document.createElement('button');
   b.className = 'swatch';
   b.setAttribute('aria-label', `Color ${i + 1}`);
-  b.onclick = () => {
-    if (state.color === i) return editColor(i);
-    state.color = i;
-    paintSwatches();
-  };
+  b.title = `Color ${i + 1}`;
+  b.onclick = () => { state.color = i; paintSwatches(); };
   swatches.append(b);
+
+  // One color input per slot: every browser ships one, so a cell is a single
+  // tap into a picker the user already knows, and all six are on screen at once
+  // rather than one at a time behind a gesture.
+  const cell = document.createElement('input');
+  cell.type = 'color';
+  cell.className = 'pcell';
+  cell.setAttribute('aria-label', `Color ${i + 1}`);
+  cell.oninput = () => {
+    state.palette[i] = cell.value;
+    paintSwatches();
+    save();
+    draw();
+  };
+  pcells.append(cell);
 });
 paintSwatches();
+
+function showPalette(on) {
+  palettePanel.hidden = !on;
+  editBtn.setAttribute('aria-pressed', String(on));
+  document.body.classList.toggle('editing-palette', on);
+}
+editBtn.onclick = () => showPalette(palettePanel.hidden);
+
+document.getElementById('palettereset').onclick = () => {
+  state.palette = [...PALETTE];
+  paintSwatches();
+  save();
+  draw();
+};
 
 const modeBtn = document.getElementById('mode');
 modeBtn.onclick = () => {

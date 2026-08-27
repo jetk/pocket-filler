@@ -105,12 +105,36 @@
     font-size: 13px; line-height: 1;
   }
   .swatch[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.12); }
-  /* The OS colour picker, parked next to the swatches so the popup opens near
-     them. Kept in flow at 1px rather than display:none, which would stop it
-     opening at all. */
-  #picker {
-    width: 1px; height: 1px; min-width: 0; padding: 0; margin: 0;
-    border: 0; opacity: 0; pointer-events: none;
+  #editpalette[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  /* Sits where the dance pill sits; when both are up the pill steps aside
+     rather than the two stacking on the same line. */
+  #palette {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 98px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-radius: 999px;
+    background: rgba(242, 242, 242, .96);
+    background: color-mix(in srgb, var(--chrome) 96%, transparent);
+    border: 1px solid var(--edge);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .1);
+  }
+  #palette[hidden] { display: none; }
+  body.editing-palette .dancebar { bottom: 150px; }
+  #pcells { display: flex; gap: 6px; }
+  /* The browser's color input, wearing the same dab as the bar so the panel
+     reads as the palette rather than as a form. */
+  .pcell {
+    width: 30px; height: 30px; min-width: 0; padding: 0;
+    border: 1px solid var(--edge); border-radius: 50%;
+    background: none; appearance: none; -webkit-appearance: none;
+  }
+  .pcell::-webkit-color-swatch-wrapper { padding: 0; }
+  .pcell::-webkit-color-swatch { border: none; border-radius: 50%; }
+  .pcell::-moz-color-swatch { border: none; border-radius: 50%; }
+  .plain {
+    height: 30px; min-width: 0; padding: 0 8px;
+    font-size: 12px; background: none; border-color: transparent;
+    color: var(--ink); opacity: .7;
   }
 </style>
 </head>
@@ -130,11 +154,18 @@
     <input id="bpm" type="range" min="30" max="240" value="170">
     <output id="bpmout" for="bpm">170</output>
   </div>
+  <!-- All six colors in one place, rather than a gesture on the bar. Each cell
+       is the browser's own color input, so tapping one is a single tap into a
+       picker the user already knows. -->
+  <div id="palette" hidden>
+    <div id="pcells"></div>
+    <button id="palettereset" class="plain">Reset</button>
+  </div>
   <div id="bar">
     <div class="row">
       <button id="mode" data-mode="draw" title="Toggle draw / fill / move">Draw</button>
       <div id="swatches"></div>
-      <input id="picker" type="color" tabindex="-1" aria-hidden="true">
+      <button id="editpalette" aria-pressed="false" aria-controls="palette" title="Edit the palette">&#9998;</button>
     </div>
     <div class="row">
       <button id="dance" aria-pressed="false" title="Point dance: nudge individual nodes about">&#9834;</button>
