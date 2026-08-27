@@ -356,7 +356,9 @@ function save() {
     // the next load. The resting copy is what the user actually drew.
     const l = dance ? JSON.parse(dance.resting) : state.lines;
     try {
-      localStorage.setItem(STORE, JSON.stringify({ l, f: state.fills, d: state.dots, p: state.palette }));
+      localStorage.setItem(STORE, JSON.stringify({
+        l, f: state.fills, d: state.dots, p: state.palette, b: +bpm.value,
+      }));
     } catch {}
   }, 250);
 }
@@ -364,7 +366,7 @@ function save() {
 function fromLocal() {
   try {
     const j = JSON.parse(localStorage.getItem(STORE));
-    return Array.isArray(j?.l) ? { l: j.l, f: j.f || {}, d: j.d, p: j.p } : null;
+    return Array.isArray(j?.l) ? { l: j.l, f: j.f || {}, d: j.d, p: j.p, b: j.b } : null;
   } catch { return null; }
 }
 
@@ -392,6 +394,12 @@ function load() {
   // A link written before palettes existed, or one on the stock colors, carries
   // no palette section — those drawings are meant to arrive in the defaults.
   if (Array.isArray(src.p) && src.p.length === PALETTE.length) state.palette = src.p;
+  // Tempo is a preference like the dots, so it is local only — a link shouldn't
+  // set the pace someone else's drawing runs at.
+  if (src.b >= +bpm.min && src.b <= +bpm.max) {
+    bpm.value = src.b;
+    bpmOut.textContent = src.b;
+  }
   facesStale = true;
 }
 
@@ -487,15 +495,19 @@ document.getElementById('undo').onclick = () => { stopDance(); undo(); };
 
 // --- dance -----------------------------------------------------------------
 
-const TICK = 350;   // jerky on purpose for now
 const danceBtn = document.getElementById('dance');
 const shapeBtn = document.getElementById('shapedance');
 const danceBar = document.getElementById('dancebar');
-const shapeBar = document.getElementById('shapebar');
-const dancers = document.getElementById('dancers');
-const dancerCount = document.getElementById('dancercount');
-const movers = document.getElementById('movers');
-const moverCount = document.getElementById('movercount');
+const count = document.getElementById('count');
+const countLabel = document.getElementById('countlabel');
+const countOut = document.getElementById('countout');
+const bpm = document.getElementById('bpm');
+const bpmOut = document.getElementById('bpmout');
+
+// A tick is a beat, so the speed control is a tempo. 170 is where the dance sat
+// before it was adjustable (a flat 350 ms), kept as the default so the feel
+// doesn't move under anyone.
+const beat = () => Math.round(60000 / +bpm.value);
 
 // How far from home a shape may drift. Fixed rather than exposed: the slider
 // is better spent on how many shapes move, which is what costs anything.
@@ -515,15 +527,17 @@ const LEASH = 2;
 // slider would buy nothing. Instead each shape carries an offset that never
 // leaves the leash, so it stays near home by construction, and stopping restores
 // the resting drawing outright.
+// The count slider means a different thing per dance and keeps its own value,
+// since going back to a dance with someone else's number would be a surprise.
 const KINDS = {
-  point: { btn: danceBtn, bar: danceBar, cls: 'dancing' },
-  shape: { btn: shapeBtn, bar: shapeBar, cls: 'dancing-shapes' },
+  point: { btn: danceBtn, cls: 'dancing', label: 'Dancers', max: 12, count: 3 },
+  shape: { btn: shapeBtn, cls: 'dancing-shapes', label: 'Movers', max: 6, count: 2 },
 };
 
 function danceTick() {
   state.lines = JSON.parse(dance.resting);
   const nodes = [...occupiedNodes()].map((k) => k.split(',').map(Number));
-  for (const [from, to] of pickMoves(nodes, +dancers.value, cols, rows)) moveNode(from, to);
+  for (const [from, to] of pickMoves(nodes, +count.value, cols, rows)) moveNode(from, to);
   facesStale = true;
   draw();
 }
@@ -533,7 +547,7 @@ function danceTick() {
 // guard allowed, which keeps it honest about where the shape actually is.
 function shapeTick() {
   const all = shapes();
-  const moving = new Set(pickDancers(all.map((s) => s.key), +movers.value));
+  const moving = new Set(pickDancers(all.map((s) => s.key), +count.value));
   for (const s of all) {
     if (!moving.has(s.key)) continue;
     const from = dance.offsets.get(s.key) || [0, 0];
@@ -551,27 +565,45 @@ function startDance(kind) {
   if (kind === 'shape' && !shapes().length) {
     return toast('Shape dance moves filled pockets — fill one first.');
   }
-  const { btn, bar, cls } = KINDS[kind];
-  toastEl.classList.remove('show');   // the bar lands where the toast sits
-  dance = { kind, resting: JSON.stringify(state.lines), offsets: new Map(), timer: 0 };
-  dance.timer = setInterval(kind === 'shape' ? shapeTick : danceTick, TICK);
-  btn.classList.add(cls);
-  btn.setAttribute('aria-pressed', 'true');
-  bar.hidden = false;
+  const k = KINDS[kind];
+  toastEl.classList.remove('show');   // the pill lands where the toast sits
+  countLabel.textContent = k.label;
+  count.max = k.max;
+  count.value = k.count;
+  countOut.textContent = k.count;
+  danceBar.dataset.kind = kind;
+  danceBar.hidden = false;
+
+  dance = { kind, resting: JSON.stringify(state.lines), offsets: new Map(), timer: 0,
+            run: kind === 'shape' ? shapeTick : danceTick };
+  k.btn.classList.add(k.cls);
+  k.btn.setAttribute('aria-pressed', 'true');
   state.chain = null;
   drag = null;
-  (kind === 'shape' ? shapeTick : danceTick)();
+  dance.run();
+  schedule();
+}
+
+// Each beat books the next one rather than running on a fixed interval, so a
+// tick that overruns delays the following beat instead of stacking up behind
+// it — and a tempo change simply lands on the next beat, with nothing to reset.
+function schedule() {
+  dance.timer = setTimeout(() => {
+    if (!dance) return;
+    dance.run();
+    schedule();
+  }, beat());
 }
 
 function stopDance() {
   if (!dance) return;
-  const { btn, bar, cls } = KINDS[dance.kind];
-  clearInterval(dance.timer);
+  const k = KINDS[dance.kind];
+  clearTimeout(dance.timer);
   state.lines = JSON.parse(dance.resting);   // snap back to where it started
   dance = null;
-  btn.classList.remove(cls);
-  btn.setAttribute('aria-pressed', 'false');
-  bar.hidden = true;
+  k.btn.classList.remove(k.cls);
+  k.btn.setAttribute('aria-pressed', 'false');
+  danceBar.hidden = true;
   facesStale = true;
   draw();
 }
@@ -586,14 +618,18 @@ const toggle = (kind) => () => {
 danceBtn.onclick = toggle('point');
 shapeBtn.onclick = toggle('shape');
 
-dancers.oninput = () => {
-  dancerCount.textContent = dancers.value;
-  if (dance?.kind === 'point') danceTick();
+count.oninput = () => {
+  countOut.textContent = count.value;
+  if (dance) KINDS[dance.kind].count = +count.value;
+  // The point dance redraws from rest every beat, so showing the new number at
+  // once is free. The shape dance would have to step its shapes to show it,
+  // which is a move the user didn't ask for; it waits for the next beat.
+  if (dance?.kind === 'point') dance.run();
 };
-// No re-tick on input: the count applies from the next tick, and forcing one
-// here would step shapes every time the slider twitched.
-movers.oninput = () => {
-  moverCount.textContent = movers.value;
+
+bpm.oninput = () => {
+  bpmOut.textContent = bpm.value;
+  save();                       // a tempo you chose should still be there later
 };
 
 // Two taps to clear, rather than confirm() — embedded webviews suppress or hang

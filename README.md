@@ -27,8 +27,10 @@ The mode button cycles **Draw → Fill → Move**.
 
 Both dances leave the drawing exactly as they found it. Canvas edits are ignored while either runs, the other buttons stop them first, and only one can run at a time.
 
-- **♪ Point dance** (violet) — nudges random *nodes* one position in a random direction, a few times a second, pulling the lines out of shape as it goes. The slider sets how many move at once. Every tick is measured from the resting drawing rather than the previous one, which is what stops a random walk carrying the drawing away.
-- **◆ Shape dance** (teal) — drifts whole *filled pockets* instead, so each shape keeps its form and the lines merely attached to it stretch. The slider sets how many shapes move at once. Needs at least one filled pocket, and says so if there isn't one.
+- **♪ Point dance** (violet) — nudges random *nodes* one position in a random direction, pulling the lines out of shape as it goes. Every tick is measured from the resting drawing rather than the previous one, which is what stops a random walk carrying the drawing away.
+- **◆ Shape dance** (teal) — drifts whole *filled pockets* instead, so each shape keeps its form and the lines merely attached to it stretch. Needs at least one filled pocket, and says so if there isn't one.
+
+Whichever is running shows one pill above the bar, in that dance's color. The left slider is how much moves at once — dancers for one, shapes for the other, each remembering its own number. The right slider is **♩ tempo**, in beats per minute: one beat, one step, 30 to 240. It's shared, since only one dance runs at a time, and saved locally like the dots rather than travelling in a link. Each beat books the next one instead of running on a fixed interval, so a slow frame delays the following beat rather than stacking up behind it, and a tempo change simply lands on the next beat.
 - **∷ Dots** shows and hides the dot grid. The grid still snaps when hidden — it's only the dots that go. Saved locally, and deliberately left out of shared links so a link never imposes your grid on someone else.
 - **Undo** steps back through draws, fills, moves and clears — a whole drag counts as one. **Share** puts the drawing in the URL and copies the link. Everything autosaves locally.
 

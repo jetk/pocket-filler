@@ -45,7 +45,10 @@ https://jetk.github.io/pocket-filler/ from `main` at repo root.
 Mode button cycles **Draw → Fill → Move**. Two-level bar: mode and colors on
 top, everything that acts on the drawing below. Two separate dance toggles —
 **♪ Point** (violet, nudges nodes) and **◆ Shape** (teal, drifts filled pockets)
-— plus a **∷ Dots** grid toggle. See README.md for the user-facing controls.
+— plus a **∷ Dots** grid toggle. One shared pill carries both dance sliders:
+how much moves at once (per dance, each remembering its own number) and the
+tempo in BPM (shared, since only one dance runs at a time). See README.md for
+the user-facing controls.
 
 ```
 index.html      shell, all CSS, toolbar markup
@@ -114,6 +117,12 @@ call is deliberately the same one an animation frame will make.
 - **`computeFaces` is O(n²) in crossings.** A real 69-line drawing with 35
   pockets costs ~4 ms; a dense 150-line tangle with 1342 pockets costs ~174 ms.
   Fine for edits, a ceiling for per-frame animation.
+- **A beat books the next beat.** The dance runs on a self-scheduling
+  `setTimeout`, not `setInterval`, so a tick that overruns its beat delays the
+  next one instead of stacking behind it — which matters because the tempo goes
+  up to 240 BPM (250 ms) while `computeFaces` on a dense drawing can cost more
+  than that. It also means a tempo change needs nothing reset; the next beat
+  reads the slider itself.
 - **A danced frame must never reach disk.** During a dance `state.lines` holds
   displaced positions the snap-back is about to discard; persisting them leaves
   disk disagreeing with the screen and hands the wobble back on the next load.

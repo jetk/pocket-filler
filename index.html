@@ -83,10 +83,13 @@
   }
   .dancebar[hidden] { display: none; }
   .dancebar label { opacity: .7; }
-  .dancebar input { width: 88px; height: 18px; margin: 0; }
-  #dancebar input { accent-color: #7a4fbf; }
-  #shapebar input { accent-color: #1f8a80; }
+  .dancebar input { width: 66px; height: 18px; margin: 0; }
+  .dancebar .sep { width: 1px; height: 16px; background: var(--edge); }
   .dancebar output { min-width: 1.1em; text-align: right; font-variant-numeric: tabular-nums; }
+  #bpmout { min-width: 2.2em; }
+  /* The running dance colours its own pill. */
+  #dancebar[data-kind="point"] input { accent-color: #7a4fbf; }
+  #dancebar[data-kind="shape"] input { accent-color: #1f8a80; }
   /* The strip keeps its size and the row wraps around it, rather than the
      swatches shrinking to slivers to keep everything on one line. */
   #swatches { display: flex; gap: 4px; flex: none; justify-content: center; }
@@ -109,15 +112,18 @@
 <body>
   <canvas id="sheet"></canvas>
   <div id="toast" role="status" aria-live="polite"></div>
-  <div id="dancebar" class="dancebar" hidden>
-    <label for="dancers">Dancers</label>
-    <input id="dancers" type="range" min="1" max="12" value="3">
-    <output id="dancercount" for="dancers">3</output>
-  </div>
-  <div id="shapebar" class="dancebar" hidden>
-    <label for="movers">Movers</label>
-    <input id="movers" type="range" min="1" max="6" value="2">
-    <output id="movercount" for="movers">2</output>
+  <!-- One pill for both dances: only one runs at a time, and tempo is shared,
+       so a second copy of it would only be a second thing to keep in step. -->
+  <div id="dancebar" class="dancebar" hidden data-kind="point">
+    <label for="count" id="countlabel">Dancers</label>
+    <input id="count" type="range" min="1" max="12" value="3">
+    <output id="countout" for="count">3</output>
+    <span class="sep" aria-hidden="true"></span>
+    <!-- A quarter note, the conventional tempo mark, and deliberately not the
+         eighth note on the point-dance button — they are different things. -->
+    <label for="bpm" title="Tempo, in beats per minute">&#9833;</label>
+    <input id="bpm" type="range" min="30" max="240" value="170">
+    <output id="bpmout" for="bpm">170</output>
   </div>
   <div id="bar">
     <div class="row">
