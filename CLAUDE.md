@@ -128,6 +128,17 @@ call is deliberately the same one an animation frame will make.
 - **`computeFaces` is O(n²) in crossings.** A real 69-line drawing with 35
   pockets costs ~4 ms; a dense 150-line tangle with 1342 pockets costs ~174 ms.
   Fine for edits, a ceiling for per-frame animation.
+- **Anything floating above the bar must clear the home indicator.** The bar's
+  padding grows by `env(safe-area-inset-bottom)`, which is 0 on a desktop and
+  ~34px on a phone, so a panel pinned at a flat offset sits *behind* the bar on
+  exactly the devices this app is for — and taps meant for it land on the
+  toolbar. Everything floating uses `--lift`, which carries that inset. Two
+  separate reports ("the sliders cover the bottom row", "the pencil button
+  doesn't work") were both this, and both were missed by measuring on a desktop
+  viewport where the inset is zero.
+- **`#sheet` needs `min-height: 0`.** It's a flex item and a canvas has an
+  intrinsic size, so without it the sheet refuses to shrink and a taller bar
+  gets pushed off the bottom of the screen instead.
 - **A beat books the next beat.** The dance runs on a self-scheduling
   `setTimeout`, not `setInterval`, so a tick that overruns its beat delays the
   next one instead of stacking behind it — which matters because the tempo goes

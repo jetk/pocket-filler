@@ -17,6 +17,13 @@
     --dot: #c9c9c9;
     --chrome: #f2f2f2;
     --edge: #dcdcdc;
+
+    /* How far anything floating has to sit above the bottom of the screen to
+       clear the bar. The bar is 90px of its own, plus whatever the device
+       reserves for a home indicator — which is 0 on a desktop and about 34px
+       on a phone, and is why a flat 98px left these panels tucked behind the
+       toolbar on exactly the devices this app is built for. */
+    --lift: calc(98px + env(safe-area-inset-bottom, 0px));
   }
   * { box-sizing: border-box; }
   html, body {
@@ -27,7 +34,12 @@
     -webkit-tap-highlight-color: transparent;
   }
   body { display: flex; flex-direction: column; }
-  #sheet { flex: 1; display: block; width: 100%; touch-action: none; }
+  /* min-height:0 because a flex item won't shrink below its content's own
+     size by default, and a canvas has an intrinsic one. Without it, a taller
+     bar — which is what env(safe-area-inset-bottom) makes on a phone with a
+     home indicator — pushes the bar off the bottom instead of taking room
+     from the sheet. */
+  #sheet { flex: 1; min-height: 0; display: block; width: 100%; touch-action: none; }
 
   /* Two levels: what the tap does on top, everything else below. Both rows
      centre, so the reach is the same wherever the thumb is. */
@@ -55,7 +67,7 @@
   /* Clears the two-level bar (36 + 36 + gap + padding), as 60px cleared the
      single row it replaced. */
   #toast {
-    position: fixed; left: 12px; right: 12px; bottom: 104px;
+    position: fixed; left: 12px; right: 12px; bottom: calc(var(--lift) + 6px);
     padding: 10px 12px; border-radius: 8px;
     background: var(--ink); color: var(--paper);
     line-height: 1.35; text-align: center;
@@ -73,7 +85,7 @@
      over the drawing for as long as a dance runs, so it should hide as little
      of it as possible. Slightly see-through for the same reason. */
   .dancebar {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: 98px;
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: var(--lift);
     display: flex; align-items: center; gap: 8px;
     padding: 3px 10px; border-radius: 999px;
     font-size: 12px;
@@ -110,7 +122,7 @@
   /* Sits where the dance pill sits; when both are up the pill steps aside
      rather than the two stacking on the same line. */
   #palette {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: 98px;
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: var(--lift);
     display: flex; align-items: center; gap: 8px;
     padding: 6px 10px; border-radius: 999px;
     background: rgba(242, 242, 242, .96);
@@ -122,7 +134,7 @@
   /* Carried on the pill itself rather than on the document root: the demo page
      mirrors this stylesheet scoped inside a container, where a rule anchored
      to the root silently never matches. */
-  .dancebar.stepped { bottom: 150px; }
+  .dancebar.stepped { bottom: calc(var(--lift) + 52px); }
   #pcells { display: flex; gap: 6px; }
   /* The browser's color input, wearing the same dab as the bar so the panel
      reads as the palette rather than as a form. */
