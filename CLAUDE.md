@@ -110,6 +110,13 @@ call is deliberately the same one an animation frame will make.
   `editColor()`, chosen because it is free, native and familiar on a phone. It
   is the same family of risk: if it turns out to be suppressed in a webview,
   that single call site is what an in-page picker would replace.
+- **A gesture with no mark on screen doesn't exist.** Editing a swatch is a
+  second tap on the selected one, which is tidy and was undiscoverable: the
+  first person to use it asked where the palette was. The selected swatch now
+  wears a pencil, tinted by the swatch's own brightness so it stays legible on
+  any color. `showPicker()` was measured working both top-level and inside a
+  sandboxed iframe, so the webview worry was not the problem here — the missing
+  affordance was.
 - **Anything painted from state must be repainted after `load()`.** The toolbar
   is built at module scope, so a palette arriving from a link or from disk
   reached the fills but not the swatches until `paintSwatches()` moved below

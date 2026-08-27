@@ -408,11 +408,24 @@ function load() {
 const swatches = document.getElementById('swatches');
 const picker = document.getElementById('picker');
 
+// Perceived brightness, so the pencil sits legibly on whatever the user picked.
+function isLight(hex) {
+  const v = parseInt(hex.slice(1), 16);
+  return 0.299 * ((v >> 16) & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255) > 150;
+}
+
 function paintSwatches() {
   [...swatches.children].forEach((el, j) => {
+    const on = j === state.color;
     el.style.background = state.palette[j];
-    el.setAttribute('aria-pressed', String(j === state.color));
-    el.title = j === state.color ? 'Tap again to change this color' : `Color ${j + 1}`;
+    el.setAttribute('aria-pressed', String(on));
+    // The selected swatch wears a pencil, because "tap the one you're already
+    // on" is invisible otherwise — the first person to use it asked where the
+    // palette was, and there was nothing on screen to answer them.
+    el.textContent = on ? '✎' : '';
+    el.style.color = on && !isLight(state.palette[j]) ? '#fff' : '#000';
+    el.title = on ? 'Change this color' : `Color ${j + 1}`;
+    el.setAttribute('aria-label', on ? `Color ${j + 1}, selected — tap to change it` : `Color ${j + 1}`);
   });
 }
 

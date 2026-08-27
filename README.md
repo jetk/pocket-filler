@@ -22,7 +22,7 @@ The mode button cycles **Draw → Fill → Move**.
 
 - **Draw** — tap a node to start. Each further node extends the chain. Tap the node you're on to finish; if you haven't drawn a segment yet, that cancels. Tap the first node once two or more segments exist to close the loop.
 - **Fill** — pick a swatch, tap a pocket. Tapping it again with the same color clears it.
-- **Changing a color** — tap the swatch you're already on and the system color picker opens for it. Same "tap it again" idiom as clearing a fill, so it needs no extra button. Your palette is saved locally and rides along in shared links, since fills store an index into it and a drawing sent without its palette would arrive in somebody else's colors. Links on the stock colors carry no palette and stay exactly as short as before.
+- **Changing a color** — the selected swatch wears a small pencil; tap it and the system color picker opens for that slot. Same "tap it again" idiom as clearing a fill, so it needs no extra button, but the pencil is what says so — without it nobody found the palette. Your palette is saved locally and rides along in shared links, since fills store an index into it and a drawing sent without its palette would arrive in somebody else's colors. Links on the stock colors carry no palette and stay exactly as short as before.
 - **Move** — drag any node; every line meeting it follows, snapping node to node. Fills stay with their pocket.
 
 Both dances leave the drawing exactly as they found it. Canvas edits are ignored while either runs, the other buttons stop them first, and only one can run at a time.
