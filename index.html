@@ -171,7 +171,9 @@
        so a second copy of it would only be a second thing to keep in step. -->
   <div id="dancebar" class="dancebar" hidden data-kind="point">
     <label for="count" id="countlabel">Dancers</label>
-    <input id="count" type="range" min="1" max="12" value="3">
+    <!-- Zero is a useful setting, not a degenerate one: it holds the drawing
+         still so you can tap the nodes you want without chasing them. -->
+    <input id="count" type="range" min="0" max="12" value="3">
     <output id="countout" for="count">3</output>
     <span class="sep" aria-hidden="true"></span>
     <!-- A quarter note, the conventional tempo mark, and deliberately not the

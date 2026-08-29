@@ -89,6 +89,11 @@ test('a chosen node still refuses to land on one sitting the dance out', () => {
   }
 });
 
+test('a count of zero holds everything still, so nodes can be tapped', () => {
+  assert.deepEqual(pickMoves(grid(4, 4, 3), 0, 20, 20, seeded(23)), []);
+  assert.deepEqual(pickDancers(['a', 'b', 'c'], 0, seeded(24)), []);
+});
+
 test('choosing nobody leaves the slider in charge', () => {
   const nodes = grid(4, 4, 3);
   assert.equal(pickMoves(nodes, 5, 20, 20, seeded(22), null).length, 5);
