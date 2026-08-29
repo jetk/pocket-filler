@@ -139,6 +139,12 @@ call is deliberately the same one an animation frame will make.
 - **`#sheet` needs `min-height: 0`.** It's a flex item and a canvas has an
   intrinsic size, so without it the sheet refuses to shrink and a taller bar
   gets pushed off the bottom of the screen instead.
+- **A tap during a dance picks dancers, it doesn't edit.** `pointerdown` bails
+  before the drag path while one is running, since a drag would only be thrown
+  away by the snap back. What the tap has to resolve is which *resting* node it
+  means: the point dance redraws from rest each beat, so the node under the
+  finger is somewhere else by then. `dance.at` maps resting node to where this
+  beat put it, and both the hit test and the highlight go through it.
 - **A beat books the next beat.** The dance runs on a self-scheduling
   `setTimeout`, not `setInterval`, so a tick that overruns its beat delays the
   next one instead of stacking behind it — which matters because the tempo goes

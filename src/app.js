@@ -200,6 +200,32 @@ function render() {
     if (drag) ring(drag.at, '#c0392b', true);
   }
 
+  // Who you've picked to dance, in that dance's colour.
+  if (dance && dance.chosen.size) {
+    if (dance.kind === 'shape') {
+      ctx.save();
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = '#1f8a80';
+      for (const f of getFaces()) {
+        if (!dance.chosen.has(f.key)) continue;
+        ctx.beginPath();
+        f.pts.forEach(([x, y], i) => {
+          const [px, py] = toPx(x, y);
+          i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+        });
+        ctx.closePath();
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else {
+      for (const k of dance.chosen) {
+        const at = dance.at.get(k);
+        if (at) ring(at, '#7a4fbf', true);
+      }
+    }
+  }
+
   if (state.chain) {
     const first = state.chain[0], last = state.chain.at(-1);
     if (hover && !same(hover, last)) {
@@ -243,9 +269,32 @@ function resize() {
 
 // --- interaction -----------------------------------------------------------
 
+// Tapping during a dance picks who dances. An empty set means the slider is in
+// charge; once anything is picked, only those move and the slider steps aside.
+// The node you tap is the one under your finger *now*, which during a point
+// dance is not where it rests — dance.at is what maps the two.
+function pickDancer(gx, gy) {
+  const toggle = (k) => (dance.chosen.has(k) ? dance.chosen.delete(k) : dance.chosen.add(k));
+
+  if (dance.kind === 'shape') {
+    const f = faceAt(getFaces(), gx, gy);
+    if (!f || state.fills[f.key] === undefined) return;
+    toggle(f.key);
+  } else {
+    const n = nearestNode(gx, gy);
+    if (!n) return;
+    const hit = [...dance.at].find(([, [x, y]]) => x === n[0] && y === n[1]);
+    if (!hit) return;
+    toggle(hit[0]);
+  }
+  danceBar.classList.toggle('picking', dance.chosen.size > 0);
+  draw();
+}
+
 function tap(px, py) {
   const [gx, gy] = toGrid(px, py);
 
+  if (dance) return pickDancer(gx, gy);
   if (state.mode === 'move') return;   // move mode works by dragging, not tapping
 
   if (state.mode === 'fill') {
@@ -289,9 +338,10 @@ const local = (e) => {
 };
 
 canvas.addEventListener('pointerdown', (e) => {
-  if (dance) return;   // edits during a dance would be thrown away by the snap back
   down = { x: e.clientX, y: e.clientY, t: Date.now() };
-  if (state.mode !== 'move') return;
+  // A tap during a dance picks dancers; a drag would only be thrown away by the
+  // snap back, so nothing past here runs while one is playing.
+  if (dance || state.mode !== 'move') return;
   const n = nearestNode(...local(e));
   if (!n || !occupiedNodes().has(`${n[0]},${n[1]}`)) return;
   snapshot();
@@ -544,7 +594,17 @@ const KINDS = {
 function danceTick() {
   state.lines = JSON.parse(dance.resting);
   const nodes = [...occupiedNodes()].map((k) => k.split(',').map(Number));
-  for (const [from, to] of pickMoves(nodes, +count.value, cols, rows)) moveNode(from, to);
+  const only = dance.chosen.size ? dance.chosen : null;
+  const moves = pickMoves(nodes, only ? only.size : +count.value, cols, rows, Math.random, only);
+
+  // Where each resting node ended up this beat. A tap has to select the node it
+  // landed on, not whatever happens to rest under the finger, and the highlight
+  // has to follow the node rather than stay behind at its resting place.
+  dance.at = new Map(nodes.map(([x, y]) => [`${x},${y}`, [x, y]]));
+  for (const [from, to] of moves) {
+    moveNode(from, to);
+    dance.at.set(`${from[0]},${from[1]}`, to);
+  }
   facesStale = true;
   draw();
 }
@@ -554,7 +614,8 @@ function danceTick() {
 // guard allowed, which keeps it honest about where the shape actually is.
 function shapeTick() {
   const all = shapes();
-  const moving = new Set(pickDancers(all.map((s) => s.key), +count.value));
+  const picked = dance.chosen.size ? all.map((s) => s.key).filter((k) => dance.chosen.has(k)) : null;
+  const moving = new Set(picked ?? pickDancers(all.map((s) => s.key), +count.value));
   for (const s of all) {
     if (!moving.has(s.key)) continue;
     const from = dance.offsets.get(s.key) || [0, 0];
@@ -579,9 +640,13 @@ function startDance(kind) {
   count.value = k.count;
   countOut.textContent = k.count;
   danceBar.dataset.kind = kind;
+  danceBar.classList.remove('picking');
   danceBar.hidden = false;
 
+  // `chosen` starts empty, meaning "let the slider decide". Tapping fills it,
+  // and switching the dance off and on again is how you empty it.
   dance = { kind, resting: JSON.stringify(state.lines), offsets: new Map(), timer: 0,
+            chosen: new Set(), at: new Map(),
             run: kind === 'shape' ? shapeTick : danceTick };
   k.btn.classList.add(k.cls);
   k.btn.setAttribute('aria-pressed', 'true');
@@ -638,6 +703,15 @@ bpm.oninput = () => {
   bpmOut.textContent = bpm.value;
   save();                       // a tempo you chose should still be there later
 };
+
+// The slider covers 210 BPM in about 60px, so it can only land on every third
+// value. These reach the ones in between.
+const nudgeBpm = (d) => () => {
+  bpm.value = Math.max(+bpm.min, Math.min(+bpm.max, +bpm.value + d));
+  bpm.dispatchEvent(new Event('input'));
+};
+document.getElementById('bpmdown').onclick = nudgeBpm(-1);
+document.getElementById('bpmup').onclick = nudgeBpm(1);
 
 // Two taps to clear, rather than confirm() — embedded webviews suppress or hang
 // on modal dialogs, and a modal is a poor fit for a thumb anyway.

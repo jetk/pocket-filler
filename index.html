@@ -99,10 +99,21 @@
   }
   .dancebar[hidden] { display: none; }
   .dancebar label { opacity: .7; }
-  .dancebar input { width: 66px; height: 18px; margin: 0; }
+  .dancebar { gap: 5px; }
+  .dancebar input { width: 46px; height: 18px; margin: 0; }
   .dancebar .sep { width: 1px; height: 16px; background: var(--edge); }
   .dancebar output { min-width: 1.1em; text-align: right; font-variant-numeric: tabular-nums; }
-  #bpmout { min-width: 2.2em; }
+  #bpmout { min-width: 2.2em; text-align: center; }
+  /* Small enough to sit in the pill, big enough to hit with a thumb. */
+  .dancebar .step {
+    width: 22px; min-width: 0; height: 22px; padding: 0;
+    font-size: 15px; line-height: 1; border-radius: 6px;
+  }
+  /* Once you've picked dancers by tapping, the count slider has nothing left to
+     decide, so it says so rather than sitting there looking live. */
+  .dancebar.picking #countlabel,
+  .dancebar.picking #count,
+  .dancebar.picking #countout { opacity: .3; }
   /* The running dance colours its own pill. */
   #dancebar[data-kind="point"] input { accent-color: #7a4fbf; }
   #dancebar[data-kind="shape"] input { accent-color: #1f8a80; }
@@ -167,7 +178,11 @@
          eighth note on the point-dance button — they are different things. -->
     <label for="bpm" title="Tempo, in beats per minute">&#9833;</label>
     <input id="bpm" type="range" min="30" max="240" value="170">
+    <!-- The slider spans 210 BPM in about 60px, so it lands on every third
+         value. These step one at a time for when that isn't close enough. -->
+    <button id="bpmdown" class="step" title="Slower by one">&minus;</button>
     <output id="bpmout" for="bpm">170</output>
+    <button id="bpmup" class="step" title="Faster by one">+</button>
   </div>
   <!-- All six colors in one place, rather than a gesture on the bar. Each cell
        is the browser's own color input, so tapping one is a single tap into a

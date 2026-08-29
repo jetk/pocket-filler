@@ -65,6 +65,35 @@ test('picks a different set from tick to tick', () => {
   assert.notEqual(a, b);
 });
 
+// --- picking your own dancers ----------------------------------------------
+
+test('only the chosen nodes step', () => {
+  const nodes = grid(4, 4, 3);
+  const only = new Set(['0,0', '3,3']);
+  const moves = pickMoves(nodes, only.size, 20, 20, seeded(21), only);
+  assert.equal(moves.length, 2);
+  for (const [from] of moves) assert.ok(only.has(from.join(',')), `${from} was not chosen`);
+});
+
+test('a chosen node still refuses to land on one sitting the dance out', () => {
+  // (1,0) is chosen and boxed in by neighbours that are not: its only free
+  // squares are off-grid, so it has nowhere legal to go.
+  const nodes = [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]];
+  const only = new Set(['1,0']);
+  for (let s = 0; s < 30; s++) {
+    const moves = pickMoves(nodes, 1, 2, 2, seeded(s), only);
+    for (const [, to] of moves) {
+      assert.ok(!nodes.some(([x, y]) => x === to[0] && y === to[1]),
+        `landed on an occupied node at ${to} (seed ${s})`);
+    }
+  }
+});
+
+test('choosing nobody leaves the slider in charge', () => {
+  const nodes = grid(4, 4, 3);
+  assert.equal(pickMoves(nodes, 5, 20, 20, seeded(22), null).length, 5);
+});
+
 // --- shape dance: one offset per shape, wandering on a leash ---------------
 
 test('a drifting shape never leaves its leash', () => {

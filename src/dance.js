@@ -7,9 +7,12 @@ const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -
 // Offsets are always measured from the drawing's resting positions rather than
 // from wherever the last tick left things, so the shape wobbles around its
 // original instead of random-walking away from it.
-export function pickMoves(nodes, count, cols, rows, rand = Math.random) {
+// `only`, when given, narrows which nodes may step — the set the user picked by
+// tapping. Every node still counts as occupied either way, so a chosen node
+// can't be stepped onto one that is sitting the dance out.
+export function pickMoves(nodes, count, cols, rows, rand = Math.random, only = null) {
   const taken = new Set(nodes.map(([x, y]) => `${x},${y}`));
-  const pool = [...nodes];
+  const pool = only ? nodes.filter(([x, y]) => only.has(`${x},${y}`)) : [...nodes];
   const moves = [];
   const n = Math.min(count, pool.length);
 
