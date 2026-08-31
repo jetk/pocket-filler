@@ -740,6 +740,17 @@ function notesTick(now) {
 }
 
 async function startListening() {
+  // On an origin the browser doesn't trust, navigator.mediaDevices isn't merely
+  // refused, it's absent — so this has to be said before anything asks it for a
+  // stream, or the failure reads as "no audio anywhere" when it really means
+  // "wrong address". localhost, 127.0.0.1 and [::1] count as trustworthy;
+  // [::] and a LAN address do not.
+  if (!navigator.mediaDevices) {
+    return toast(window.isSecureContext
+      ? "This browser can't capture audio."
+      : 'Audio capture needs https, or http://localhost — not this address.');
+  }
+
   // A tab carries the music itself; a microphone carries the room. Tab capture
   // is Chrome and Edge on desktop only, so the phone falls back to the mic.
   let stream = null;
