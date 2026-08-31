@@ -56,6 +56,10 @@
     display: grid; place-items: center;
   }
   button:active { background: var(--edge); }
+  /* The `display: grid` above is an author rule, so it beats the browser's own
+     `[hidden] { display: none }` and the attribute quietly stops working on
+     every button in the app. This puts it back. */
+  button[hidden] { display: none; }
   #mode { min-width: 56px; }
   #mode[data-mode="fill"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
   /* Move keeps its own colour: it's the mode where the node handles appear. */
@@ -109,6 +113,11 @@
     width: 22px; min-width: 0; height: 22px; padding: 0;
     font-size: 15px; line-height: 1; border-radius: 6px;
   }
+  .dancebar .step.wide { width: auto; padding: 0 7px; font-size: 11px; }
+  .dancebar .step[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  #hearing { display: flex; gap: 4px; }
+  #hearing[hidden] { display: none; }
+  button.listening { background: #b8562f; color: #fff; border-color: #b8562f; }
   /* Once you've picked dancers by tapping, the count slider has nothing left to
      decide, so it says so rather than sitting there looking live. */
   .dancebar.picking #countlabel,
@@ -185,6 +194,12 @@
     <button id="bpmdown" class="step" title="Slower by one">&minus;</button>
     <output id="bpmout" for="bpm">170</output>
     <button id="bpmup" class="step" title="Faster by one">+</button>
+    <!-- Swapped in for the tempo group while listening: the music is the clock,
+         so what's left to choose is what a note does. -->
+    <span id="hearing" hidden>
+      <button id="mapnotes" class="step wide" aria-pressed="true" title="Each note moves its own node">Notes</button>
+      <button id="mapbeats" class="step wide" aria-pressed="false" title="Any new note fires one beat">Beats</button>
+    </span>
   </div>
   <!-- All six colors in one place, rather than a gesture on the bar. Each cell
        is the browser's own color input, so tapping one is a single tap into a
@@ -202,6 +217,7 @@
     <div class="row">
       <button id="dance" aria-pressed="false" title="Point dance: nudge individual nodes about">&#9834;</button>
       <button id="shapedance" aria-pressed="false" title="Shape dance: drift whole filled shapes">&#9670;</button>
+      <button id="listen" aria-pressed="false" title="Dance to whatever is playing">&#9835;</button>
       <button id="dots" aria-pressed="true" title="Hide the dot grid">&#8759;</button>
       <button id="undo" title="Undo last line">&#8630;</button>
       <button id="clear" title="Clear everything">&#10005;</button>

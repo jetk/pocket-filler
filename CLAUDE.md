@@ -57,6 +57,8 @@ src/planar.js   segments -> enclosed faces. Pure, no DOM. The core.
 src/shapes.js   which nodes a pocket owns; moving a set of them at once. Pure.
 src/codec.js    drawing <-> URL fragment
 src/dance.js    choreography (which nodes step, which shapes drift). Pure.
+src/listen.js   live audio -> 12 pitch-class levels. Copied from sefirograph.
+src/notes.js    pitch-class levels -> which node moves. Pure.
 test/*.test.js  node --test, no framework, no fixtures
 ```
 
@@ -139,6 +141,10 @@ call is deliberately the same one an animation frame will make.
 - **`#sheet` needs `min-height: 0`.** It's a flex item and a canvas has an
   intrinsic size, so without it the sheet refuses to shrink and a taller bar
   gets pushed off the bottom of the screen instead.
+- **`hidden` does nothing on a button here** unless `button[hidden]` puts it
+  back. The bar's `button { display: grid }` is an author rule, so it outranks
+  the browser's own `[hidden] { display: none }` — the attribute sets, the
+  element stays. Cost an hour of the tempo steppers refusing to go away.
 - **A tap during a dance picks dancers, it doesn't edit.** `pointerdown` bails
   before the drag path while one is running, since a drag would only be thrown
   away by the snap back. What the tap has to resolve is which *resting* node it

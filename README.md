@@ -34,6 +34,8 @@ Both dances leave the drawing exactly as they found it. Canvas edits are ignored
 
 Whichever dance is running shows one pill above the bar, in that dance's color. The left slider is how much moves at once — dancers for one, shapes for the other, each remembering its own number. Slide it to zero and the drawing holds still, which is the easy way to tap the ones you want. The right slider is **♩ tempo**, in beats per minute: one beat, one step, 30 to 240. It's shared, since only one dance runs at a time, and saved locally like the dots rather than travelling in a link. The slider covers 210 BPM in about 50px, so it lands on roughly every third value; **−** and **+** beside the number reach the ones in between. Each beat books the next one instead of running on a fixed interval, so a slow frame delays the following beat rather than stacking up behind it, and a tempo change simply lands on the next beat.
 
+**♫ Dance to music** (experimental). Captures a tab's audio on desktop Chrome or Edge, or the microphone anywhere else, and lets the music drive the beats instead of the clock. Two readings, switchable in the pill so they can be compared against the same track: **Notes** gives every pitch class a node of its own, which it holds out of place for as long as that note sounds — a trill between two pitches reads as two nodes flicking at each other. **Beats** just fires one ordinary beat whenever a new note starts, keeping the current feel with the metronome taken off. The tempo controls hide while listening, because the music is the clock.
+
 **Pick your own dancers.** While a dance is running, tap a node to choose it, or a filled pocket in the shape dance. Easiest with the count at zero, so nothing is moving under your finger while you pick. Chosen ones are ringed in the dance's color and are the only ones that move; the count slider dims, because it has nothing left to decide. Tap again to drop one. Switching the dance off and on again forgets the lot and hands it back to the slider.
 
 The shape dance can't re-derive from rest each tick the way the point dance does. Doing so would mean re-applying every shape's offset every time, so a tick would cost what the *drawing* costs rather than what's moving, and the slider would buy nothing — measured, that's 95 ms a tick at 32 filled pockets against a 350 ms budget, versus 8 ms when only two shapes move. So each shape carries an offset that never leaves a fixed leash: it stays near home by construction rather than by being rebuilt, and stopping restores the resting drawing outright.
@@ -69,6 +71,8 @@ Not every corner of a pocket can be carried. A boundary corner that is a crossin
 - `src/shapes.js` — which nodes a pocket owns, and moving a set of them at once. Pure.
 - `src/codec.js` — drawing to and from the URL fragment. Pure.
 - `src/dance.js` — which nodes step where on a dance tick, and which shapes drift. Pure.
+- `src/listen.js` — live audio to twelve pitch-class levels. Copied from [sefirograph](https://github.com/jetk/sefirograph); fix it there and copy it back rather than forking it.
+- `src/notes.js` — pitch-class levels to which node moves. Pure.
 - `src/app.js` — state, input, rendering, persistence, toolbar.
 
 Lines are the only source of truth; pockets are recomputed from them on every change. That's also the seam for animation later: move endpoints, re-derive.

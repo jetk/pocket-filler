@@ -2,6 +2,8 @@ import { computeFaces, faceAt } from './planar.js';
 import { encode, decode, decodeLegacy } from './codec.js';
 import { pickMoves, pickDancers, wander } from './dance.js';
 import { shapeNodes, translate, applyMoves, wouldWeld } from './shapes.js';
+import { createListener, CHROMA_CONFIG } from './listen.js';
+import { sounding, started, inReadingOrder, notesToMoves } from './notes.js';
 
 // px per grid unit. Nominally 1 cm (96 CSS px per inch), but CSS px drift from
 // physical size per device — hold a ruler to the screen and tune this.
@@ -653,7 +655,7 @@ function startDance(kind) {
   state.chain = null;
   drag = null;
   dance.run();
-  schedule();
+  if (!ears) schedule();   // while listening, the music books the beats
 }
 
 // Each beat books the next one rather than running on a fixed interval, so a
@@ -679,6 +681,135 @@ function stopDance() {
   facesStale = true;
   draw();
 }
+
+// --- listening ---------------------------------------------------------------
+
+// Experimental. Two readings of "dance to the music", switchable so they can be
+// compared against the same track:
+//
+//   notes — every sounding pitch class displaces the one node it owns, and the
+//           node returns when the note stops. A trill between two pitches reads
+//           as two nodes flicking at each other, which is the point.
+//   beats — a new note fires one ordinary beat of whichever dance is running.
+//           Keeps the existing feel and just takes the clock off the metronome.
+//
+// listen.js gives twelve pitch-class levels, not notes, so "a note" is a class
+// loud enough to count. Coarse on purpose: this isn't transcription.
+const listenBtn = document.getElementById('listen');
+const hearing = document.getElementById('hearing');
+const mapNotesBtn = document.getElementById('mapnotes');
+const mapBeatsBtn = document.getElementById('mapbeats');
+
+let ears = null;   // { ctx, stream, listener, frame, on: [pitch classes] }
+let mapping = 'notes';
+
+function setMapping(m) {
+  mapping = m;
+  mapNotesBtn.setAttribute('aria-pressed', String(m === 'notes'));
+  mapBeatsBtn.setAttribute('aria-pressed', String(m === 'beats'));
+};
+mapNotesBtn.onclick = () => setMapping('notes');
+mapBeatsBtn.onclick = () => setMapping('beats');
+
+// Every sounding class holds its node out of place for as long as it sounds, so
+// the drawing is a picture of what's playing rather than a reaction to it. The
+// set of sounding classes changes a handful of times a second while the frames
+// come sixty times a second, so redoing the geometry only when that set changes
+// keeps computeFaces off all but a few frames.
+function notesTick(now) {
+  const levels = ears.listener.read(now);
+  const on = sounding(levels, ears.on);
+  const fired = started(on, ears.on);
+  ears.on = on;
+
+  if (mapping === 'beats') {
+    if (fired.length) dance.run();
+    return;
+  }
+
+  const key = on.join(',');
+  if (key === ears.shown) return;
+  ears.shown = key;
+
+  state.lines = JSON.parse(dance.resting);
+  facesStale = true;
+  const ordered = inReadingOrder([...occupiedNodes()].map((k) => k.split(',').map(Number)));
+  moveNodes(notesToMoves(on, ordered, cols, rows));
+  dance.at = new Map(ordered.map((n) => [n.join(','), n]));
+  draw();
+}
+
+async function startListening() {
+  // A tab carries the music itself; a microphone carries the room. Tab capture
+  // is Chrome and Edge on desktop only, so the phone falls back to the mic.
+  let stream = null;
+  try {
+    if (navigator.mediaDevices?.getDisplayMedia) {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true });
+      if (!stream.getAudioTracks().length) {
+        stream.getTracks().forEach((t) => t.stop());
+        return toast('Shared without audio — pick the tab again and tick "Also share tab audio".');
+      }
+    } else {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+  } catch (e) {
+    if (e?.name === 'NotAllowedError' && stream === null) return;   // picker dismissed
+    return toast("Couldn't hear anything — this needs a tab with audio, or a microphone.");
+  }
+
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (ctx.state === 'suspended') ctx.resume();
+  // sefirograph lets a note fall away over 0.18s, which reads as sustain behind
+  // a glow. A step is discrete, so here the fall has to be done before the next
+  // note lands or a trill just holds both nodes out: measured against an 8
+  // notes/sec trill, 0.18 gave 3 changes in four seconds and 0.09 gave 65.
+  // Overridden from this side so the vendored file stays a copy, not a fork.
+  const heard = { ...CHROMA_CONFIG, releaseTau: 0.09 };
+  ears = { ctx, stream, listener: createListener(ctx, stream, heard), on: [], shown: '', frame: 0 };
+  stream.getAudioTracks()[0].onended = () => stopListening();
+
+  // Listening drives whichever dance is running, so without one there is
+  // nothing to hear it. Start the point dance rather than doing nothing.
+  if (!dance) startDance('point');
+
+  listenBtn.classList.add('listening');
+  listenBtn.setAttribute('aria-pressed', 'true');
+  hearing.hidden = false;
+  tempoGroup(false);
+
+  const loop = () => {
+    if (!ears) return;
+    if (dance) notesTick(ears.ctx.currentTime);
+    ears.frame = requestAnimationFrame(loop);
+  };
+  ears.frame = requestAnimationFrame(loop);
+}
+
+function stopListening() {
+  if (!ears) return;
+  cancelAnimationFrame(ears.frame);
+  ears.listener.dispose();
+  ears.stream.getTracks().forEach((t) => t.stop());
+  ears.ctx.close().catch(() => {});
+  ears = null;
+  listenBtn.classList.remove('listening');
+  listenBtn.setAttribute('aria-pressed', 'false');
+  hearing.hidden = true;
+  tempoGroup(true);
+  if (dance) { state.lines = JSON.parse(dance.resting); facesStale = true; draw(); }
+}
+
+// The tempo controls have nothing to say while the music is the clock.
+function tempoGroup(show) {
+  for (const el of [bpm, bpmOut, document.getElementById('bpmdown'),
+                    document.getElementById('bpmup'),
+                    document.querySelector('label[for="bpm"]')]) {
+    el.hidden = !show;
+  }
+}
+
+listenBtn.onclick = () => (ears ? stopListening() : startListening());
 
 // Starting one dance stops the other: they both own every node, so running both
 // would have each fighting the other's restore.
