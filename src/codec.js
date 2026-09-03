@@ -35,8 +35,10 @@ const isHex = (h) => typeof h === 'string' && /^#[0-9a-fA-F]{6}$/.test(h);
 const isCoord = (v) => Number.isInteger(v) && v >= 0 && v < 64;
 
 // A color is an index into the palette, or INK for the sheet's own line color,
-// which is why this goes one past the six.
-const INK = 6;
+// which is why this goes one past the six. Defined here rather than in app.js
+// because this is the module that has to validate it, and app.js imports it so
+// there is only ever one of it — two would agree today and drift later.
+export const INK = 6;
 const isColor = (v) => Number.isInteger(v) && v >= 0 && v <= INK;
 
 export function encode({ l, f = {}, p, lc = {}, nc = {} }) {

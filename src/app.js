@@ -1,5 +1,5 @@
 import { computeFaces, faceAt, lineAt } from './planar.js';
-import { encode, decode, decodeLegacy } from './codec.js';
+import { encode, decode, decodeLegacy, INK } from './codec.js';
 import { pickMoves, pickDancers, wander } from './dance.js';
 import { shapeNodes, translate, applyMoves, wouldWeld } from './shapes.js';
 import { createListener, CHROMA_CONFIG } from './listen.js';
@@ -13,11 +13,12 @@ const SNAP = 0.45;         // tap-to-node radius, in grid units
 const PALETTE = ['#e0655c', '#ec9c46', '#e8c84e', '#68b877', '#579fd8', '#a077cc'];
 const STORE = 'pocket-filler';
 
-// One past the palette, meaning "the sheet's own line color". It's a real
-// choice rather than the absence of one: picking it is how you paint a line or
-// a node back to plain, and it's what's selected at startup so a fresh drawing
-// comes out exactly as it always did.
-const INK = PALETTE.length;
+// INK comes from codec.js, which is where it has to be validated. It means "the
+// sheet's own line color" and is one past the palette — a real choice rather
+// than the absence of one: picking it is how you paint a line or a node back to
+// plain, and it's what's selected at startup so a fresh drawing comes out
+// exactly as it always did.
+if (INK !== PALETTE.length) throw new Error('INK must sit one past the palette');
 const TAP_LINE = 0.28;   // how near a line counts as tapping it, in grid units
 
 // The sheet's colors live in index.html so there's one place to change them.
