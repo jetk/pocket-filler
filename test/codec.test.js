@@ -85,6 +85,42 @@ test('a palette link is still URL-clean', () => {
   assert.equal(encodeURIComponent(s), s);
 });
 
+// --- line and node colours, two more optional sections ---------------------
+
+test('round-trips coloured lines and nodes', () => {
+  const d = { ...drawing, lc: { 0: 2, 2: 6 }, nc: { '3,2': 0, '6,2': 5 } };
+  assert.deepEqual(decode(encode(d)), d);
+});
+
+test('a drawing with no coloured anything is the link it always was', () => {
+  assert.equal(encode(drawing), encode({ ...drawing, lc: {}, nc: {} }));
+});
+
+test('colours ride behind the palette, and an absent palette leaves a gap', () => {
+  const s = encode({ ...drawing, lc: { 0: 1 } });
+  // version, lines, fills, palette, lineInk
+  assert.equal(s.split('.').length, 5);
+  assert.equal(s.split('.')[3], '', 'the palette section is present but empty');
+  assert.deepEqual(decode(s).lc, { 0: 1 });
+  assert.equal(decode(s).p, undefined);
+});
+
+test('a link written before either existed still loads', () => {
+  const back = decode('1.DCGCGCFFFFDC.');
+  assert.equal(back.lc, undefined);
+  assert.equal(back.nc, undefined);
+});
+
+test('half-delivered colour data is rejected rather than half-applied', () => {
+  const s = encode({ ...drawing, nc: { '3,2': 4 } });
+  assert.throws(() => decode(s.slice(0, s.length - 1)), SyntaxError);
+});
+
+test('a colour outside the palette plus ink is refused', () => {
+  assert.throws(() => encode({ ...drawing, lc: { 0: 7 } }), RangeError);
+  assert.throws(() => encode({ ...drawing, nc: { '3,2': -1 } }), RangeError);
+});
+
 test('legacy base64 links still load', () => {
   const s = btoa(JSON.stringify(drawing)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   assert.deepEqual(decodeLegacy(s), drawing);

@@ -18,10 +18,11 @@ node --test test/*.test.js
 
 The bar has two levels: what you're drawing with on top — the mode button and the colors — and everything that acts on the drawing below.
 
-The mode button cycles **Draw → Fill → Move**.
+The mode button cycles **Draw → Paint → Move**.
 
 - **Draw** — tap a node to start. Each further node extends the chain. Tap the node you're on to finish; if you haven't drawn a segment yet, that cancels. Tap the first node once two or more segments exist to close the loop.
-- **Fill** — pick a swatch, tap a pocket. Tapping it again with the same color clears it.
+- **Paint** — puts the selected color on whatever you tap: a node, a line, or a pocket, in that order of priority, since a node is the smallest target and sits on top of the other two. Tapping the same thing in the same color takes the color off again.
+- **Ink** — the first dab in the row is the sheet's own line color rather than one of the six, and it's what's selected at startup. Lines you draw are born in the selected color, so with ink selected a drawing comes out exactly as it always did; pick a color first and the lines come out in it. Painting a line or node ink is how you take the color back off.
 - **✎ Palette** — the pencil beside the swatches opens a panel with all six colors at once. Each cell is the browser's own color input, so changing one is a single tap into a picker you already know. **Reset** puts the stock six back. Your palette is saved locally and rides along in shared links, since fills store an index into it and a drawing sent without its palette would arrive in somebody else's colors. Links on the stock colors carry no palette and stay exactly as short as before.
 - **Move** — drag any node; every line meeting it follows, snapping node to node. Fills stay with their pocket.
 
@@ -49,7 +50,7 @@ pf.moveNode([3, 5], [4, 6]);   // move a node and everything welded to it
 pf.redraw();
 ```
 
-Nodes are identified by position, so all line ends sharing a grid point move together. Fills are keyed by the lines bounding a pocket, so a color follows its pocket through a move as long as the topology holds.
+Nodes are identified by position, so all line ends sharing a grid point move together. A painted node is keyed the same way, so `moveNodes` carries its color along with it — otherwise the paint would stay behind on an empty grid point. Fills are keyed by the lines bounding a pocket, so a color follows its pocket through a move as long as the topology holds.
 
 Whole shapes move too. A shape is a pocket you have colored — the color is the selection, so there's nothing to infer:
 

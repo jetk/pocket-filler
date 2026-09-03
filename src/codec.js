@@ -1,10 +1,15 @@
 // Drawing <-> URL fragment. Base64-of-JSON was ~22 chars per line, long enough
 // that shared links got truncated in transit; this is 4.
 //
-// Fragment layout:  1.<lines>.<fill>~<fill>~....<palette>
+// Fragment layout:  1.<lines>.<fill>~<fill>~....<palette>.<lineInk>.<nodeInk>
 //   lines    four chars per line: ax ay bx by, one char each
 //   fill     two chars per bounding line id, then occurrence index, then color
 //   palette  optional, four chars per color (24 bits of rgb), six colors
+//   lineInk  optional, three chars per colored line: two-char line id, color
+//   nodeInk  optional, three chars per colored node: x, y, color
+// Trailing sections are dropped when empty and empty ones in the middle are
+// left as nothing between two dots, so a plain drawing's link is exactly the
+// length it always was and a link written before any of this still decodes.
 // The palette section is appended only when the user has changed a swatch, so
 // ordinary links are exactly as short as they were before it existed, and a
 // link written before it stays readable — a missing section just means the
@@ -29,7 +34,12 @@ const isHex = (h) => typeof h === 'string' && /^#[0-9a-fA-F]{6}$/.test(h);
 
 const isCoord = (v) => Number.isInteger(v) && v >= 0 && v < 64;
 
-export function encode({ l, f = {}, p }) {
+// A color is an index into the palette, or INK for the sheet's own line color,
+// which is why this goes one past the six.
+const INK = 6;
+const isColor = (v) => Number.isInteger(v) && v >= 0 && v <= INK;
+
+export function encode({ l, f = {}, p, lc = {}, nc = {} }) {
   const flat = l.flat();
   if (!flat.every(isCoord)) throw new RangeError('coordinates outside the shareable 0-63 grid');
 
@@ -38,22 +48,37 @@ export function encode({ l, f = {}, p }) {
     return ids.split(',').map((id) => c2(+id)).join('') + c1(+idx) + c1(color);
   });
 
-  let out = `1.${flat.map(c1).join('')}.${fills.join('~')}`;
-  if (p) {
-    if (!p.every(isHex)) throw new RangeError('palette colors must be #rrggbb');
-    out += '.' + p.map((h) => c4(parseInt(h.slice(1), 16))).join('');
-  }
-  return out;
+  const pal = p ? p.map((h) => {
+    if (!isHex(h)) throw new RangeError('palette colors must be #rrggbb');
+    return c4(parseInt(h.slice(1), 16));
+  }).join('') : '';
+
+  const lineInk = Object.entries(lc).map(([id, c]) => {
+    if (!isColor(c)) throw new RangeError('line color out of range');
+    return c2(+id) + c1(c);
+  }).join('');
+
+  const nodeInk = Object.entries(nc).map(([at, c]) => {
+    const [x, y] = at.split(',').map(Number);
+    if (!isCoord(x) || !isCoord(y)) throw new RangeError('node outside the shareable 0-63 grid');
+    if (!isColor(c)) throw new RangeError('node color out of range');
+    return c1(x) + c1(y) + c1(c);
+  }).join('');
+
+  const tail = [pal, lineInk, nodeInk];
+  while (tail.length && !tail[tail.length - 1]) tail.pop();
+  return [`1.${flat.map(c1).join('')}`, fills.join('~'), ...tail].join('.');
 }
 
 export function decode(s) {
-  const [ver, lineStr = '', fillStr = '', palStr = ''] = s.split('.');
+  const [ver, lineStr = '', fillStr = '', palStr = '', lineStr2 = '', nodeStr = ''] = s.split('.');
   if (ver !== '1') throw new SyntaxError('unknown format');
   if (lineStr.length % 4) throw new SyntaxError('truncated line data');
-  if ([...lineStr + fillStr + palStr].some((ch) => ch !== '~' && !A.includes(ch))) {
+  if ([...lineStr + fillStr + palStr + lineStr2 + nodeStr].some((ch) => ch !== '~' && !A.includes(ch))) {
     throw new SyntaxError('corrupt characters');
   }
   if (palStr && palStr.length % 4) throw new SyntaxError('truncated palette data');
+  if (lineStr2.length % 3 || nodeStr.length % 3) throw new SyntaxError('truncated color data');
 
   const l = [];
   for (let i = 0; i < lineStr.length; i += 4) l.push([...lineStr.slice(i, i + 4)].map(n1));
@@ -67,6 +92,18 @@ export function decode(s) {
   }
 
   const out = { l, f };
+  if (lineStr2) {
+    out.lc = {};
+    for (let i = 0; i < lineStr2.length; i += 3) {
+      out.lc[n2(lineStr2.slice(i, i + 2))] = n1(lineStr2[i + 2]);
+    }
+  }
+  if (nodeStr) {
+    out.nc = {};
+    for (let i = 0; i < nodeStr.length; i += 3) {
+      out.nc[`${n1(nodeStr[i])},${n1(nodeStr[i + 1])}`] = n1(nodeStr[i + 2]);
+    }
+  }
   if (palStr) {
     out.p = [];
     for (let i = 0; i < palStr.length; i += 4) {

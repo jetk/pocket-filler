@@ -1,4 +1,4 @@
-import { computeFaces, faceAt } from './planar.js';
+import { computeFaces, faceAt, lineAt } from './planar.js';
 import { encode, decode, decodeLegacy } from './codec.js';
 import { pickMoves, pickDancers, wander } from './dance.js';
 import { shapeNodes, translate, applyMoves, wouldWeld } from './shapes.js';
@@ -13,9 +13,19 @@ const SNAP = 0.45;         // tap-to-node radius, in grid units
 const PALETTE = ['#e0655c', '#ec9c46', '#e8c84e', '#68b877', '#579fd8', '#a077cc'];
 const STORE = 'pocket-filler';
 
+// One past the palette, meaning "the sheet's own line color". It's a real
+// choice rather than the absence of one: picking it is how you paint a line or
+// a node back to plain, and it's what's selected at startup so a fresh drawing
+// comes out exactly as it always did.
+const INK = PALETTE.length;
+const TAP_LINE = 0.28;   // how near a line counts as tapping it, in grid units
+
 // The sheet's colors live in index.html so there's one place to change them.
 // Read once a frame rather than per shape — the same call the dots already made.
 const theme = { ink: '#222222', paper: '#ffffff', dot: '#c9c9c9' };
+// A color index resolves against the palette, except INK which is the theme's.
+const colorOf = (i) => (i === INK ? theme.ink : state.palette[i]);
+
 function readTheme() {
   const s = getComputedStyle(document.body);
   for (const k of Object.keys(theme)) {
@@ -30,11 +40,18 @@ function readTheme() {
 // stays out of the share codec, so a link never imposes your grid on someone else.
 // `palette` goes the other way — fills store an index into it, so a drawing
 // shared without its palette would arrive in somebody else's colors.
+// lineColors and nodeColors are sparse: a line with no entry is ink, a node
+// with no entry isn't painted at all. Sparse so a plain drawing carries nothing
+// extra, on disk or in a link.
 const state = {
-  lines: [], fills: {}, mode: 'draw', color: 0, chain: null,
-  dots: true, palette: [...PALETTE],
+  lines: [], fills: {}, mode: 'draw', color: INK, chain: null,
+  dots: true, palette: [...PALETTE], lineColors: {}, nodeColors: {},
 };
 const MODES = ['draw', 'fill', 'move'];
+// "Fill" stopped being the truth when it grew to paint lines and nodes as well
+// as pockets. The internal name stays, since face keys and saved drawings don't
+// care what the button says.
+const MODE_LABEL = { draw: 'Draw', fill: 'Paint', move: 'Move' };
 
 const canvas = document.getElementById('sheet');
 const ctx = canvas.getContext('2d');
@@ -81,7 +98,18 @@ function occupiedNodes() {
 // back intact when the node is dragged away again.
 export function moveNodes(deltas) {
   const touched = applyMoves(state.lines, deltas);
-  if (touched) facesStale = true;
+  if (touched) {
+    // A painted node is keyed by where it is, so moving the node has to carry
+    // its color along or the paint stays behind on an empty grid point. Same
+    // hazard as a fill losing its pocket, one level down.
+    const moved = {};
+    for (const [at, c] of Object.entries(state.nodeColors)) {
+      const to = deltas.get(at);
+      moved[to ? `${to[0]},${to[1]}` : at] = c;
+    }
+    state.nodeColors = moved;
+    facesStale = true;
+  }
   return touched;
 }
 
@@ -137,7 +165,9 @@ export function moveShape(key, delta) {
 // drag undoes as one step because the snapshot is taken when it starts.
 const undoStack = [];
 function snapshot() {
-  undoStack.push(JSON.stringify({ l: state.lines, f: state.fills }));
+  undoStack.push(JSON.stringify({
+    l: state.lines, f: state.fills, lc: state.lineColors, nc: state.nodeColors,
+  }));
   if (undoStack.length > 50) undoStack.shift();
 }
 
@@ -154,7 +184,7 @@ function render() {
   for (const f of getFaces()) {
     const c = state.fills[f.key];
     if (c === undefined) continue;
-    ctx.fillStyle = state.palette[c];
+    ctx.fillStyle = colorOf(c);
     ctx.beginPath();
     f.pts.forEach(([x, y], i) => {
       const [px, py] = toPx(x, y);
@@ -176,15 +206,41 @@ function render() {
     }
   }
 
-  ctx.strokeStyle = theme.ink;
+  // One path per color rather than one per line: a drawing only ever has seven
+  // of them, so this stays a handful of strokes however many lines there are.
   ctx.lineWidth = 2;
   ctx.lineCap = 'round';
-  ctx.beginPath();
-  for (const [ax, ay, bx, by] of state.lines) {
-    ctx.moveTo(...toPx(ax, ay));
-    ctx.lineTo(...toPx(bx, by));
+  const byColor = new Map();
+  state.lines.forEach((l, id) => {
+    const c = state.lineColors[id] ?? INK;
+    if (!byColor.has(c)) byColor.set(c, []);
+    byColor.get(c).push(l);
+  });
+  for (const [c, group] of byColor) {
+    ctx.strokeStyle = colorOf(c);
+    ctx.beginPath();
+    for (const [ax, ay, bx, by] of group) {
+      ctx.moveTo(...toPx(ax, ay));
+      ctx.lineTo(...toPx(bx, by));
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
+
+  // Painted nodes sit on top of the lines that meet them, so a junction reads
+  // as one dot rather than as whatever crosses it last. While a dance is
+  // running the paint is still keyed to the resting node, so it's looked up
+  // through dance.at to find where that node is this beat.
+  for (const [at, c] of Object.entries(state.nodeColors)) {
+    const here = dance?.at?.get(at) ?? at.split(',').map(Number);
+    const [px, py] = toPx(here[0], here[1]);
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, Math.PI * 2);
+    ctx.fillStyle = colorOf(c);
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = theme.ink;
+    ctx.stroke();
+  }
 
   // In move mode the nodes you can actually grab need to be visible.
   if (state.mode === 'move') {
@@ -299,15 +355,7 @@ function tap(px, py) {
   if (dance) return pickDancer(gx, gy);
   if (state.mode === 'move') return;   // move mode works by dragging, not tapping
 
-  if (state.mode === 'fill') {
-    const f = faceAt(getFaces(), gx, gy);
-    if (!f) return;
-    snapshot();
-    if (state.fills[f.key] === state.color) delete state.fills[f.key];
-    else state.fills[f.key] = state.color;
-    save();
-    return draw();
-  }
+  if (state.mode === 'fill') return paint(gx, gy);
 
   const n = nearestNode(gx, gy);
   if (!n) return;
@@ -327,9 +375,52 @@ function tap(px, py) {
   draw();
 }
 
+// Fill grew into paint: one mode that puts the selected color on whatever you
+// tapped. A node beats a line beats a pocket, because a node is the smallest
+// target and sits on top of the other two — tapping a corner should never fill
+// the region behind it. Tapping the same thing in the same color takes the
+// color off again, which is the rule fills already had.
+function paint(gx, gy) {
+  const at = nearestNode(gx, gy);
+  const key = at && `${at[0]},${at[1]}`;
+  if (key && occupiedNodes().has(key)) {
+    snapshot();
+    if (state.nodeColors[key] === state.color) delete state.nodeColors[key];
+    else state.nodeColors[key] = state.color;
+    return done();
+  }
+
+  const id = lineAt(state.lines.map((l, i) => ({ id: i, a: [l[0], l[1]], b: [l[2], l[3]] })),
+                    gx, gy, TAP_LINE);
+  if (id !== null) {
+    snapshot();
+    // Ink is a line's natural color, so painting one ink is the same as saying
+    // it has none — stored as absence rather than as an entry that means "plain".
+    if (state.color === INK || state.lineColors[id] === state.color) delete state.lineColors[id];
+    else state.lineColors[id] = state.color;
+    return done();
+  }
+
+  const f = faceAt(getFaces(), gx, gy);
+  if (!f) return;
+  snapshot();
+  if (state.fills[f.key] === state.color) delete state.fills[f.key];
+  else state.fills[f.key] = state.color;
+  return done();
+}
+
+function done() {
+  save();
+  draw();
+}
+
 function addLine(a, b) {
   snapshot();
-  state.lines.push([a[0], a[1], b[0], b[1]]);
+  const id = state.lines.push([a[0], a[1], b[0], b[1]]) - 1;
+  // A line drawn while a color is selected is born that color. Ink is the
+  // startup selection, so a drawing made without touching the swatches comes
+  // out exactly as it always did.
+  if (state.color !== INK) state.lineColors[id] = state.color;
   facesStale = true;
 }
 
@@ -407,9 +498,11 @@ function save() {
     // would leave disk disagreeing with the screen and hand back the wobble on
     // the next load. The resting copy is what the user actually drew.
     const l = dance ? JSON.parse(dance.resting) : state.lines;
+    const nc = dance ? JSON.parse(dance.restingPaint) : state.nodeColors;
     try {
       localStorage.setItem(STORE, JSON.stringify({
         l, f: state.fills, d: state.dots, p: state.palette, b: +bpm.value,
+        lc: state.lineColors, nc,
       }));
     } catch {}
   }, 250);
@@ -418,7 +511,9 @@ function save() {
 function fromLocal() {
   try {
     const j = JSON.parse(localStorage.getItem(STORE));
-    return Array.isArray(j?.l) ? { l: j.l, f: j.f || {}, d: j.d, p: j.p, b: j.b } : null;
+    return Array.isArray(j?.l)
+      ? { l: j.l, f: j.f || {}, d: j.d, p: j.p, b: j.b, lc: j.lc, nc: j.nc }
+      : null;
   } catch { return null; }
 }
 
@@ -442,6 +537,8 @@ function load() {
   if (!src) return;
   state.lines = src.l;
   state.fills = src.f;
+  state.lineColors = src.lc || {};
+  state.nodeColors = src.nc || {};
   state.dots = src.d !== false;   // a shared link carries no preference; dots stay on
   // A link written before palettes existed, or one on the stock colors, carries
   // no palette section — those drawings are meant to arrive in the defaults.
@@ -463,23 +560,29 @@ const pcells = document.getElementById('pcells');
 const editBtn = document.getElementById('editpalette');
 
 function paintSwatches() {
-  [...swatches.children].forEach((el, j) => {
-    el.style.background = state.palette[j];
-    el.setAttribute('aria-pressed', String(j === state.color));
-  });
+  for (const el of swatches.children) {
+    const c = +el.dataset.color;
+    el.style.background = colorOf(c);
+    el.setAttribute('aria-pressed', String(c === state.color));
+  }
   [...pcells.children].forEach((el, j) => { el.value = state.palette[j]; });
 }
 
 // A swatch only ever picks a color. Editing used to be a second tap on the
 // selected one, which was tidy and undiscoverable — the first person to use it
 // asked where the palette was. It lives behind its own button now.
-PALETTE.forEach((c, i) => {
+// Ink leads the row: it's the startup selection, it's what a line already is,
+// and picking it is how you paint one back to plain.
+[INK, ...PALETTE.keys()].forEach((i) => {
   const b = document.createElement('button');
   b.className = 'swatch';
-  b.setAttribute('aria-label', `Color ${i + 1}`);
-  b.title = `Color ${i + 1}`;
+  b.dataset.color = i;
+  const name = i === INK ? 'Ink' : `Color ${i + 1}`;
+  b.setAttribute('aria-label', name);
+  b.title = name;
   b.onclick = () => { state.color = i; paintSwatches(); };
   swatches.append(b);
+  if (i === INK) return;   // ink isn't one of the six the palette panel edits
 
   // One color input per slot: every browser ships one, so a cell is a single
   // tap into a picker the user already knows, and all six are on screen at once
@@ -517,7 +620,7 @@ modeBtn.onclick = () => {
   stopDance();
   state.mode = MODES[(MODES.indexOf(state.mode) + 1) % MODES.length];
   modeBtn.dataset.mode = state.mode;
-  modeBtn.textContent = state.mode[0].toUpperCase() + state.mode.slice(1);
+  modeBtn.textContent = MODE_LABEL[state.mode];
   state.chain = null;
   hover = null;
   drag = null;
@@ -541,9 +644,11 @@ dotsBtn.onclick = () => {
 function undo() {
   const prev = undoStack.pop();
   if (!prev) return;
-  const { l, f } = JSON.parse(prev);
+  const { l, f, lc, nc } = JSON.parse(prev);
   state.lines = l;
   state.fills = f;
+  state.lineColors = lc || {};
+  state.nodeColors = nc || {};
   state.chain = null;
   facesStale = true;
   save();
@@ -595,6 +700,7 @@ const KINDS = {
 
 function danceTick() {
   state.lines = JSON.parse(dance.resting);
+  state.nodeColors = JSON.parse(dance.restingPaint);
   const nodes = [...occupiedNodes()].map((k) => k.split(',').map(Number));
   const only = dance.chosen.size ? dance.chosen : null;
   const moves = pickMoves(nodes, only ? only.size : +count.value, cols, rows, Math.random, only);
@@ -647,7 +753,9 @@ function startDance(kind) {
 
   // `chosen` starts empty, meaning "let the slider decide". Tapping fills it,
   // and switching the dance off and on again is how you empty it.
-  dance = { kind, resting: JSON.stringify(state.lines), offsets: new Map(), timer: 0,
+  dance = { kind, resting: JSON.stringify(state.lines),
+            restingPaint: JSON.stringify(state.nodeColors),
+            offsets: new Map(), timer: 0,
             chosen: new Set(), at: new Map(),
             run: kind === 'shape' ? shapeTick : danceTick };
   k.btn.classList.add(k.cls);
@@ -674,6 +782,7 @@ function stopDance() {
   const k = KINDS[dance.kind];
   clearTimeout(dance.timer);
   state.lines = JSON.parse(dance.resting);   // snap back to where it started
+  state.nodeColors = JSON.parse(dance.restingPaint);
   dance = null;
   k.btn.classList.remove(k.cls);
   k.btn.setAttribute('aria-pressed', 'false');
@@ -732,6 +841,7 @@ function notesTick(now) {
   ears.shown = key;
 
   state.lines = JSON.parse(dance.resting);
+  state.nodeColors = JSON.parse(dance.restingPaint);
   facesStale = true;
   const ordered = inReadingOrder([...occupiedNodes()].map((k) => k.split(',').map(Number)));
   moveNodes(notesToMoves(on, ordered, cols, rows));
@@ -808,7 +918,12 @@ function stopListening() {
   listenBtn.setAttribute('aria-pressed', 'false');
   hearing.hidden = true;
   tempoGroup(true);
-  if (dance) { state.lines = JSON.parse(dance.resting); facesStale = true; draw(); }
+  if (dance) {
+    state.lines = JSON.parse(dance.resting);
+    state.nodeColors = JSON.parse(dance.restingPaint);
+    facesStale = true;
+    draw();
+  }
 }
 
 // The tempo controls have nothing to say while the music is the clock.
@@ -885,6 +1000,8 @@ clearBtn.onclick = () => {
   snapshot();
   state.lines = [];
   state.fills = {};
+  state.lineColors = {};
+  state.nodeColors = {};
   state.chain = null;
   facesStale = true;
   history.replaceState(null, '', location.pathname);
@@ -900,8 +1017,16 @@ document.getElementById('share').onclick = async (e) => {
   const f = Object.fromEntries(Object.entries(state.fills).filter(([k]) => live.has(k)));
 
   const custom = state.palette.some((c, i) => c !== PALETTE[i]);
+  // Paint on a node that no longer exists is worth keeping locally, so undo can
+  // bring node and color back together, but there's nothing for it to land on
+  // at the other end.
+  const here = occupiedNodes();
+  const nc = Object.fromEntries(Object.entries(state.nodeColors).filter(([k]) => here.has(k)));
   try {
-    history.replaceState(null, '', '#' + encode({ l: state.lines, f, p: custom ? state.palette : undefined }));
+    history.replaceState(null, '', '#' + encode({
+      l: state.lines, f, p: custom ? state.palette : undefined,
+      lc: state.lineColors, nc,
+    }));
   } catch (err) {
     return toast(err.message);
   }

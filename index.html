@@ -136,7 +136,12 @@
     border-radius: 50%; border: 2px solid transparent;
     font-size: 13px; line-height: 1;
   }
-  .swatch[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.12); }
+  /* The inner ring is what makes the selection visible on the ink dab, where an
+     ink border would simply vanish into it. */
+  .swatch[aria-pressed="true"] {
+    border-color: var(--ink); box-shadow: inset 0 0 0 2px var(--paper);
+    transform: scale(1.12);
+  }
   #editpalette[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 
   /* Sits where the dance pill sits; when both are up the pill steps aside
@@ -210,7 +215,7 @@
   </div>
   <div id="bar">
     <div class="row">
-      <button id="mode" data-mode="draw" title="Toggle draw / fill / move">Draw</button>
+      <button id="mode" data-mode="draw" title="Toggle draw / paint / move">Draw</button>
       <div id="swatches"></div>
       <button id="editpalette" aria-pressed="false" aria-controls="palette" title="Edit the palette">&#9998;</button>
     </div>

@@ -42,7 +42,8 @@ hard part — so a library would have been weight without leverage.
 Static page, zero dependencies, no build step. Live at
 https://jetk.github.io/pocket-filler/ from `main` at repo root.
 
-Mode button cycles **Draw → Fill → Move**. Two-level bar: mode and colors on
+Mode button cycles **Draw → Paint → Move** ('fill' internally; the label
+changed when it grew to paint lines and nodes as well as pockets). Two-level bar: mode and colors on
 top, everything that acts on the drawing below. Two separate dance toggles —
 **♪ Point** (violet, nudges nodes) and **◆ Shape** (teal, drifts filled pockets)
 — plus a **∷ Dots** grid toggle. One shared pill carries both dance sliders:
@@ -71,7 +72,9 @@ that way; `app.js` is the only file that touches the document.
 state = {
   lines: [[ax, ay, bx, by], ...],  // grid units; array index IS the line id
   fills: { [faceKey]: colorIndex },
-  palette: ['#rrggbb', ...6],      // colorIndex indexes this
+  lineColors: { [lineId]: colorIndex },   // sparse; absent means ink
+  nodeColors: { "x,y": colorIndex },      // sparse; absent means unpainted
+  palette: ['#rrggbb', ...6],      // colorIndex indexes this; INK is one past it
   mode, color, chain, dots
 }
 ```
@@ -95,7 +98,11 @@ call is deliberately the same one an animation frame will make.
    round-trip. Fractional coordinates require widening coords to two chars.
 4. **Face keys must stay derivable from line ids**, or fills stop surviving
    moves and animation.
-5. **A fill is an index, not a color.** `palette` therefore travels with the
+5. **Paint on a node is keyed by position, like the node itself.** So it has to
+   move when the node moves — `moveNodes` remaps `nodeColors` for exactly the
+   reason invariant 2 exists, and a dance snapshots and restores it alongside
+   `lines` so a beat's remapping never sticks or reaches disk.
+6. **A fill is an index, not a color.** `palette` therefore travels with the
    drawing — saved locally *and* carried in the share link — or a shared
    drawing arrives in whatever colors the recipient happens to have. `dots`
    goes the other way: a view preference, local only. The palette is a fourth,

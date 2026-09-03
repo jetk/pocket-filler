@@ -183,6 +183,27 @@ function contains(pts, x, y) {
   return inside;
 }
 
+// Perpendicular distance from a point to a segment, clamped to its ends so the
+// area beyond a tip doesn't count as near the line.
+function distToSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 < EPS ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+}
+
+// Which drawn line is under the finger. Nearest wins rather than first, so
+// tapping a crossing picks the line you were actually closest to. Returns the
+// segment's id, since that's what a color is stored against.
+export function lineAt(segments, x, y, tol) {
+  let best = null, near = tol;
+  for (const s of segments) {
+    const d = distToSegment(x, y, s.a[0], s.a[1], s.b[0], s.b[1]);
+    if (d <= near) { near = d; best = s.id; }
+  }
+  return best;
+}
+
 // Smallest face containing the point, so nested pockets resolve to the innermost.
 export function faceAt(faces, x, y) {
   let best = null;
