@@ -384,12 +384,14 @@ function tap(px, py) {
 function paint(gx, gy) {
   const at = nearestNode(gx, gy);
   const key = at && `${at[0]},${at[1]}`;
-  if (key && occupiedNodes().has(key)) {
+  const paintNode = () => {
     snapshot();
     if (state.nodeColors[key] === state.color) delete state.nodeColors[key];
     else state.nodeColors[key] = state.color;
     return done();
-  }
+  };
+
+  if (key && occupiedNodes().has(key)) return paintNode();
 
   const id = lineAt(state.lines.map((l, i) => ({ id: i, a: [l[0], l[1]], b: [l[2], l[3]] })),
                     gx, gy, TAP_LINE);
@@ -403,11 +405,20 @@ function paint(gx, gy) {
   }
 
   const f = faceAt(getFaces(), gx, gy);
-  if (!f) return;
-  snapshot();
-  if (state.fills[f.key] === state.color) delete state.fills[f.key];
-  else state.fills[f.key] = state.color;
-  return done();
+  if (f) {
+    snapshot();
+    if (state.fills[f.key] === state.color) delete state.fills[f.key];
+    else state.fills[f.key] = state.color;
+    return done();
+  }
+
+  // A bare grid point with no line on it comes last, not first. The tap radius
+  // covers about two thirds of every cell, and pockets are full of dots, so
+  // letting any dot win would leave almost nowhere to tap that fills a pocket.
+  // Last means a bare dot is painted exactly where nothing else claims the tap,
+  // which is what "unattached" means anyway. The cost: a bare dot inside a
+  // pocket can't be painted while the pocket is there.
+  if (key) return paintNode();
 }
 
 function done() {
@@ -1018,11 +1029,9 @@ document.getElementById('share').onclick = async (e) => {
   const f = Object.fromEntries(Object.entries(state.fills).filter(([k]) => live.has(k)));
 
   const custom = state.palette.some((c, i) => c !== PALETTE[i]);
-  // Paint on a node that no longer exists is worth keeping locally, so undo can
-  // bring node and color back together, but there's nothing for it to land on
-  // at the other end.
-  const here = occupiedNodes();
-  const nc = Object.fromEntries(Object.entries(state.nodeColors).filter(([k]) => here.has(k)));
+  // Every painted point travels, attached to a line or not: a dot on its own is
+  // something the user put there, not paint left behind by a node that's gone.
+  const nc = state.nodeColors;
   try {
     history.replaceState(null, '', '#' + encode({
       l: state.lines, f, p: custom ? state.palette : undefined,

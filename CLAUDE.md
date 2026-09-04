@@ -152,6 +152,12 @@ call is deliberately the same one an animation frame will make.
   back. The bar's `button { display: grid }` is an author rule, so it outranks
   the browser's own `[hidden] { display: none }` — the attribute sets, the
   element stays. Cost an hour of the tempo steppers refusing to go away.
+- **In Paint, a bare grid point resolves last.** Attached node, then line, then
+  pocket, then any dot at all. The tap radius is 0.45 grid units, which is ~64%
+  of every cell, and pockets are full of dots — put bare dots first and there is
+  almost nowhere left to tap that fills a pocket. Last means a bare dot is
+  painted exactly where nothing else claims the tap, which is what "unattached"
+  means anyway.
 - **A tap during a dance picks dancers, it doesn't edit.** `pointerdown` bails
   before the drag path while one is running, since a drag would only be thrown
   away by the snap back. What the tap has to resolve is which *resting* node it
