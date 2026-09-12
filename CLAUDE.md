@@ -42,24 +42,39 @@ hard part — so a library would have been weight without leverage.
 Static page, zero dependencies, no build step. Live at
 https://jetk.github.io/pocket-filler/ from `main` at repo root.
 
-Mode button cycles **Draw → Paint → Move** ('fill' internally; the label
-changed when it grew to paint lines and nodes as well as pockets). Two-level bar: mode and colors on
-top, everything that acts on the drawing below. Two separate dance toggles —
-**♪ Point** (violet, nudges nodes) and **◆ Shape** (teal, drifts filled pockets)
-— plus a **∷ Dots** grid toggle. One shared pill carries both dance sliders:
-how much moves at once (per dance, each remembering its own number) and the
-tempo in BPM (shared, since only one dance runs at a time). See README.md for
-the user-facing controls.
+Mode button cycles **Draw → Paint → Move → Path** ('fill' internally for Paint;
+the label changed when it grew to paint lines and nodes as well as pockets).
+Two-level bar: mode and colors on top, everything that acts on the drawing
+below — **▶ play**, **⚙ drawer**, **∷ dots**, **⛶ perform**, undo, clear, share.
+
+Animation is **one clock with layers subscribed to it**, each declaring a
+division (every beat / 2 / bar / 2 bars / 4 bars). Layers are two kinds:
+
+- **movement** mutates `state.lines`, so exactly one runs at a time —
+  **Points** (violet), **Shapes** (teal), **Paths** (orange). They all own every
+  node; two would each be restoring over the other. Snapshot on start, restore
+  on stop.
+- **looks** change only how the drawing is *drawn* and never touch state, so any
+  number stack over any movement — cycle, pop, strobe, trace, reveal. Nothing to
+  snap back, nothing that can reach disk, no weld risk.
+
+Everything that isn't reached for mid-track lives in the ⚙ drawer; the pill
+keeps the count slider, the beat dot and the tempo. See README.md for the
+user-facing controls.
 
 ```
-index.html      shell, all CSS, toolbar markup
-src/app.js      state, input, rendering, persistence, toolbar, dance driver
+index.html      shell, all CSS, toolbar and drawer markup
+src/app.js      state, input, rendering, persistence, toolbar, the clock
 src/planar.js   segments -> enclosed faces. Pure, no DOM. The core.
 src/shapes.js   which nodes a pocket owns; moving a set of them at once. Pure.
 src/codec.js    drawing <-> URL fragment
+src/clock.js    tempo, divisions, tap tempo. Pure.
 src/dance.js    choreography (which nodes step, which shapes drift). Pure.
+src/looks.js    render-time animation: cycle, pop, strobe, reveal. Pure.
+src/trace.js    the line graph, and a point travelling it. Pure.
+src/paths.js    authored routes: which waypoint is next. Pure.
 src/listen.js   live audio -> 12 pitch-class levels. Copied from sefirograph.
-src/notes.js    pitch-class levels -> which node moves. Pure.
+src/notes.js    pitch-class levels -> which node moves, and the drop. Pure.
 test/*.test.js  node --test, no framework, no fixtures
 ```
 
@@ -74,10 +89,20 @@ state = {
   fills: { [faceKey]: colorIndex },
   lineColors: { [lineId]: colorIndex },   // sparse; absent means ink
   nodeColors: { "x,y": colorIndex },      // sparse; absent means unpainted
+  paths: { "x,y": { pts: [[x,y],...], closed } },   // pts[0] IS the key
   palette: ['#rrggbb', ...6],      // colorIndex indexes this; INK is one past it
   mode, color, chain, dots
 }
+
+anim = {                           // how the drawing is PLAYED, not part of it
+  bpm, countIn, drop,
+  move: 'none'|'point'|'shape'|'path', moveDiv, counts, leash,
+  looks: { cycle, pop, strobe, trace, reveal },   // each { on, div, ...extras }
+}
 ```
+
+`anim` saves locally and stays out of share links — a link carries a drawing,
+not a way of playing it — and is exactly what a preset slot copies.
 
 `lines` is the single source of truth. Faces are recomputed from it on every
 change via `computeFaces()` — never stored, never incrementally patched. That
@@ -100,8 +125,16 @@ call is deliberately the same one an animation frame will make.
    moves and animation.
 5. **Paint on a node is keyed by position, like the node itself.** So it has to
    move when the node moves — `moveNodes` remaps `nodeColors` for exactly the
-   reason invariant 2 exists, and a dance snapshots and restores it alongside
-   `lines` so a beat's remapping never sticks or reaches disk.
+   reason invariant 2 exists, and a performance snapshots and restores it
+   alongside `lines` so a beat's remapping never sticks or reaches disk.
+   Because it is remapped, `nodeColors` keys are always *current* positions
+   during a performance: render them where the key says, never through
+   `perf.at`. That map goes resting→current and answering it with a current key
+   is wrong precisely when a node has landed on a point another mover vacated.
+   A **route** is keyed the same way and `remapPaths` moves it with a dragged
+   node — but only when `!perf`. During a performance the node is being moved
+   *by* its route, and carrying the route along would have it chase its own
+   walker down the sheet.
 6. **A fill is an index, not a color.** `palette` therefore travels with the
    drawing — saved locally *and* carried in the share link — or a shared
    drawing arrives in whatever colors the recipient happens to have. `dots`
@@ -148,10 +181,12 @@ call is deliberately the same one an animation frame will make.
 - **`#sheet` needs `min-height: 0`.** It's a flex item and a canvas has an
   intrinsic size, so without it the sheet refuses to shrink and a taller bar
   gets pushed off the bottom of the screen instead.
-- **`hidden` does nothing on a button here** unless `button[hidden]` puts it
-  back. The bar's `button { display: grid }` is an author rule, so it outranks
-  the browser's own `[hidden] { display: none }` — the attribute sets, the
-  element stays. Cost an hour of the tempo steppers refusing to go away.
+- **`hidden` does nothing** on any element this stylesheet gives a `display` to,
+  because an author rule outranks the browser's own `[hidden] { display: none }`
+  — the attribute sets and the element stays. Cost an hour on the tempo
+  steppers, then came straight back the moment a flex row got a `hidden`
+  attribute. Now one rule at the top, `[hidden] { display: none !important }`,
+  rather than a matching selector to remember beside every `display` forever.
 - **In Paint, a bare grid point resolves last.** Attached node, then line, then
   pocket, then any dot at all. The tap radius is 0.45 grid units, which is ~64%
   of every cell, and pockets are full of dots — put bare dots first and there is
@@ -181,6 +216,24 @@ call is deliberately the same one an animation frame will make.
   them out.
 - **Grid coordinates are absolute at fixed 1 cm zoom.** A drawing authored on a
   wide phone clips on a narrower screen. Known, unfixed — see below.
+- **A look must never touch `state`.** That is the whole reason any number of
+  them can stack over a movement layer: there is nothing to snap back, nothing
+  that can reach disk mid-beat, and no way for one to weld two nodes together.
+  A "look" that mutates the drawing is a movement layer wearing the wrong hat
+  and belongs in `MOVE_TICK`, exclusive with the others.
+- **The tracer is fractional because it is never stored.** That is the trick,
+  not an oversight: invariant 3 binds what `codec.js` has to round-trip, and a
+  render-time position is outside it. Anything else that wants to be smooth
+  should ask first whether it needs to be saved — if it doesn't, it can move
+  however it likes today without waiting on two-char coordinates.
+- **Only movement layers re-derive geometry.** `computeFaces` is O(n²) in
+  crossings, so a continuous frame loop is only affordable because cycle, pop,
+  strobe, trace and reveal all read memoized faces and never set `facesStale`.
+  If a look ever needs new geometry per frame, the frame budget is gone.
+- **`continuous()` is what keeps the rAF loop turning**, and only pop, strobe
+  and trace need it — the cycle and the reveal change on a beat, so they are
+  free. An idle page with nothing running must go back to drawing once per
+  change, or the app burns battery sitting still on someone's phone.
 - **Browser-pane click injection is flaky** (30 s timeouts, occasional double
   delivery). Verify with dispatched pointer events via `javascript_tool`, not by
   clicking, and never test destructive actions against a live drawing.
@@ -195,10 +248,15 @@ node --test 'test/*.test.js'
 python3 -m http.server 8000
 ```
 
-48 tests, all in node with `assert` — no framework, no fixtures. The geometry,
-codec, shape extraction and choreography are covered; rendering and input are
-not. Non-trivial
-logic should leave one runnable check behind.
+122 tests, all in node with `assert` — no framework, no fixtures. The geometry,
+codec, shape extraction, choreography, tempo, look envelopes, the line graph,
+routes and the drop detector are covered; rendering and input are not.
+Non-trivial logic should leave one runnable check behind.
+
+Rendering and input get checked in a real browser instead — Playwright against
+`python3 -m http.server`, dispatching pointer events at grid coordinates rather
+than clicking, and **looking at the screenshots**. The `hidden` regression above
+passed every assertion and was visible the moment anyone looked at the panel.
 
 Deploy is `git push` to `main`; Pages rebuilds in ~30 s. Commits are written in
 normal prose (the caveman/ponytail session styles apply to chat, not to commits
@@ -218,6 +276,11 @@ pf.moveShape(pf.shapes()[0].key, [1, 0]); pf.redraw();
 
 ## Open threads
 
+- **Repeatability.** Deliberately last, and not built. `dance.js` takes `rand`
+  as a parameter on every function, so a seeded PRNG drops straight in and a
+  take becomes reproducible — the same seed, the same performance, three
+  characters in the fragment. Worth doing when re-recording a take you liked
+  matters more than it currently does.
 - **Move a whole shape.** Built, but not by the union-find route sketched here.
   Connected components answer "what is joined to what", which is not the same
   question as "what did the user mean by a shape" — and the caveat that shapes
