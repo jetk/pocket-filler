@@ -193,24 +193,27 @@ call is deliberately the same one an animation frame will make.
   almost nowhere left to tap that fills a pocket. Last means a bare dot is
   painted exactly where nothing else claims the tap, which is what "unattached"
   means anyway.
-- **A tap during a dance picks dancers, it doesn't edit.** `pointerdown` bails
-  before the drag path while one is running, since a drag would only be thrown
-  away by the snap back. What the tap has to resolve is which *resting* node it
-  means: the point dance redraws from rest each beat, so the node under the
-  finger is somewhere else by then. `dance.at` maps resting node to where this
-  beat put it, and both the hit test and the highlight go through it.
-- **A beat books the next beat.** The dance runs on a self-scheduling
-  `setTimeout`, not `setInterval`, so a tick that overruns its beat delays the
-  next one instead of stacking behind it — which matters because the tempo goes
-  up to 240 BPM (250 ms) while `computeFaces` on a dense drawing can cost more
-  than that. It also means a tempo change needs nothing reset; the next beat
-  reads the slider itself.
-- **A danced frame must never reach disk.** During a dance `state.lines` holds
-  displaced positions the snap-back is about to discard; persisting them leaves
-  disk disagreeing with the screen and hands the wobble back on the next load.
-  This bit once, via the dots toggle calling `save()` mid-dance, so the rule now
-  lives in `save()` itself: it writes `dance.resting` whenever a dance is
-  running. Dance *ticks* still only mutate and redraw.
+- **A tap during a performance picks dancers, it doesn't edit.** `pointerdown`
+  bails before the drag path while one is running, since a drag would only be
+  thrown away by the snap back. What the tap has to resolve is which *resting*
+  node it means: the Points layer redraws from rest each beat, so the node under
+  the finger is somewhere else by then. `perf.at` maps resting node to where
+  this beat put it, and both the hit test and the highlight go through it —
+  those two, and nothing else (see invariant 5 for what it is wrong for).
+- **A beat books the next beat.** The clock runs on a self-scheduling
+  `setTimeout`, not `setInterval`, so a beat that overruns delays the next one
+  instead of stacking behind it — which matters because the tempo goes up to
+  240 BPM (250 ms) while `computeFaces` on a dense drawing can cost more than
+  that. It also means a tempo change needs nothing reset; the next beat reads
+  `anim.bpm` itself. Tap tempo is the one thing that *does* reset it, on
+  purpose: it clears the pending beat and restarts from zero, because setting
+  where beat one is is half of what tapping along to a track is for.
+- **A performed frame must never reach disk.** While one runs, `state.lines`
+  holds displaced positions the snap-back is about to discard; persisting them
+  leaves disk disagreeing with the screen and hands the wobble back on the next
+  load. This bit once, via the dots toggle calling `save()` mid-dance, so the
+  rule now lives in `save()` itself: it writes `perf.resting` whenever a
+  performance is running. Beat *ticks* still only mutate and redraw.
 - **Stale fill keys are kept on purpose** in `state.fills`, so undo restores a
   pocket and its color together. They cost bytes and nothing else. Share filters
   them out.
@@ -264,8 +267,9 @@ or code).
 
 ## Console handle
 
-`window.pf` exposes `state`, `moveNode(from, to)`, `moveNodes(deltas)`,
-`shapes()`, `moveShape(key, delta)`, `redraw()`, `faces()`. `moveNode` is the
+`window.pf` exposes `state`, `anim`, `moveNode(from, to)`, `moveNodes(deltas)`,
+`shapes()`, `moveShape(key, delta)`, `redraw()`, `faces()`, `play()`, `stop()`.
+`moveNode` is the
 seam animation uses — the node drag is just repeated calls to it, and it is now
 a one-entry call into `moveNodes`.
 
