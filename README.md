@@ -25,7 +25,11 @@ The mode button cycles **Draw → Paint → Move → Path**.
 - **Ink** — the first dab in the row is the sheet's own line color rather than one of the six, and it's what's selected at startup. Lines you draw are born in the selected color, so with ink selected a drawing comes out exactly as it always did; pick a color first and the lines come out in it. Painting a line or node ink is how you take the color back off.
 - **✎ Palette** — the pencil beside the swatches opens a panel with all six colors at once. Each cell is the browser's own color input, so changing one is a single tap into a picker you already know. **Reset** puts the stock six back. Your palette is saved locally and rides along in shared links, since fills store an index into it and a drawing sent without its palette would arrive in somebody else's colors. Links on the stock colors carry no palette and stay exactly as short as before.
 - **Move** — drag any node; every line meeting it follows, snapping node to node. Fills stay with their pocket.
-- **Path** — draw a route for a node to walk. Tap a node with lines on it to start, then tap grid points to lay waypoints. The rules are Draw's, unchanged: tap the point you're standing on to finish, tap the first one to close the loop. Tapping a node that already has a route picks it up for editing, so tapping an anchor twice is how you delete one. Routes show only while you're laying them — scaffolding in the frame is scaffolding in the reel.
+- **Path** — draw a route for a node to walk. Tap a node **with lines on it** to start — routes move nodes, so they anchor to the line work, not to bare grid and not to filled shapes. Then tap grid points to lay waypoints; waypoints can be anywhere on the grid, lines or no lines. The rules are Draw's, unchanged: tap the point you're standing on to finish, tap the first one to close the loop.
+
+  Tapping a node that already has a route **picks it up** for editing, and says so. From there: **tap that same node again to delete the route**, or lay more waypoints and finish as usual. So "tap an anchor twice" removes a route whether it is one you just started or one that was already there. Undo brings a deleted route back.
+
+  Routes show only while you're laying them — scaffolding in the frame is scaffolding in the reel.
 
 ## Animating
 

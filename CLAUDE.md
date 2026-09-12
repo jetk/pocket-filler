@@ -237,6 +237,18 @@ call is deliberately the same one an animation frame will make.
   and trace need it — the cycle and the reveal change on a beat, so they are
   free. An idle page with nothing running must go back to drawing once per
   change, or the app burns battery sitting still on someone's phone.
+- **A route anchors to a node with lines on it, and nothing else.** Not a bare
+  grid point (there is no node there to move) and not a filled shape (a route
+  moves one node, not a pocket). Waypoints are unrestricted — they may sit
+  anywhere on the grid, including where no line runs, which is the whole point
+  of authoring one.
+- **`draft.fresh` is the only window in which an anchor tap means delete.** A
+  picked-up route arrives with every waypoint already in the draft, so without
+  it the anchor tap fell through to "close the loop" and handed the route
+  straight back — an existing route could be edited but never removed. Adding
+  any waypoint clears the flag and the anchor means "close" again. `fresh` is a
+  fact about the gesture, so `finishPath` writes only `pts` and `closed`; it
+  must never reach disk or a link.
 - **Browser-pane click injection is flaky** (30 s timeouts, occasional double
   delivery). Verify with dispatched pointer events via `javascript_tool`, not by
   clicking, and never test destructive actions against a live drawing.

@@ -669,7 +669,10 @@ function layPath(gx, gy) {
     snapshot();
     if (existing) {
       delete state.paths[nodeKey(n)];
-      draft = { pts: [...existing.pts], closed: false };
+      // `fresh` means picked up and not yet touched, which is the only window in
+      // which tapping the anchor can mean "delete" rather than "close the loop".
+      draft = { pts: [...existing.pts], closed: false, fresh: true };
+      toast('Route picked up — add waypoints, or tap that node again to delete it.');
     } else {
       draft = { pts: [n], closed: false };
     }
@@ -677,18 +680,34 @@ function layPath(gx, gy) {
   }
 
   const first = draft.pts[0], last = draft.pts.at(-1);
+
+  // Tap an anchor twice to remove its route. One rule for both cases: on a new
+  // route the second tap leaves nothing behind, and on an existing one it drops
+  // the copy taken at pick-up, which deleted it from state already. Without
+  // this, an existing route could be picked up and edited but never removed —
+  // the anchor tap fell through to "close the loop" and handed it straight back.
+  if (draft.fresh && same(n, first)) {
+    draft = null;
+    save();
+    return draw();
+  }
+
   if (same(n, last)) return finishPath();
   if (draft.pts.length >= 3 && same(n, first)) {
     draft.closed = true;
     return finishPath();
   }
   draft.pts.push(n);
+  draft.fresh = false;   // it has been edited; the anchor means "close" again
   draw();
 }
 
 function finishPath() {
-  if (draft.pts.length >= 2) state.paths[nodeKey(draft.pts[0])] = draft;
-  else undoStack.pop();          // picked up and put straight back down; not a step
+  // Only pts and closed are the route; `fresh` is a fact about the gesture in
+  // progress and has no business on disk or in a link.
+  if (draft.pts.length >= 2) {
+    state.paths[nodeKey(draft.pts[0])] = { pts: draft.pts, closed: draft.closed };
+  } else undoStack.pop();        // picked up and put straight back down; not a step
   draft = null;
   save();
   draw();
