@@ -3,7 +3,11 @@ import { encode, decode, decodeLegacy, INK } from './codec.js';
 import { pickMoves, pickDancers, wander } from './dance.js';
 import { shapeNodes, translate, applyMoves, wouldWeld } from './shapes.js';
 import { createListener, CHROMA_CONFIG } from './listen.js';
-import { sounding, started, inReadingOrder, notesToMoves } from './notes.js';
+import { sounding, started, inReadingOrder, notesToMoves, trackEnergy } from './notes.js';
+import { beatMs, clampBpm, fires, fireCount, tapTempo, scaleBpm, DIVS, MIN_BPM, MAX_BPM } from './clock.js';
+import { shiftColor, popScale, scaleAbout, strobing, revealed, faceReady } from './looks.js';
+import { adjacency, advance, positionOf, onGraph, spawn } from './trace.js';
+import { walkers, nextMove, step, segmentAt, valid as pathValid } from './paths.js';
 
 // px per grid unit. Nominally 1 cm (96 CSS px per inch), but CSS px drift from
 // physical size per device — hold a ruler to the screen and tune this.
@@ -12,6 +16,7 @@ const MARGIN = 0.6 * CM;   // keep dots off the very edge
 const SNAP = 0.45;         // tap-to-node radius, in grid units
 const PALETTE = ['#e0655c', '#ec9c46', '#e8c84e', '#68b877', '#579fd8', '#a077cc'];
 const STORE = 'pocket-filler';
+const SLOTS = 'pocket-filler-presets';
 
 // INK comes from codec.js, which is where it has to be validated. It means "the
 // sheet's own line color" and is one past the palette — a real choice rather
@@ -20,6 +25,12 @@ const STORE = 'pocket-filler';
 // exactly as it always did.
 if (INK !== PALETTE.length) throw new Error('INK must sit one past the palette');
 const TAP_LINE = 0.28;   // how near a line counts as tapping it, in grid units
+
+// How far from home a shape may drift, and how far a pop throws a shape past
+// its own size. The leash is on a slider because it changes the feel; the pop
+// is not, because past about a third the shapes start overlapping their
+// neighbours and it stops reading as a pulse.
+const POP = 0.3;
 
 // The sheet's colors live in index.html so there's one place to change them.
 // Read once a frame rather than per shape — the same call the dots already made.
@@ -44,15 +55,37 @@ function readTheme() {
 // lineColors and nodeColors are sparse: a line with no entry is ink, a node
 // with no entry isn't painted at all. Sparse so a plain drawing carries nothing
 // extra, on disk or in a link.
+// `paths` is authored movement: a route per node, keyed by that node's resting
+// position, with the node itself as the route's first point.
 const state = {
   lines: [], fills: {}, mode: 'draw', color: INK, chain: null,
-  dots: true, palette: [...PALETTE], lineColors: {}, nodeColors: {},
+  dots: true, palette: [...PALETTE], lineColors: {}, nodeColors: {}, paths: {},
 };
-const MODES = ['draw', 'fill', 'move'];
+const MODES = ['draw', 'fill', 'move', 'path'];
 // "Fill" stopped being the truth when it grew to paint lines and nodes as well
 // as pockets. The internal name stays, since face keys and saved drawings don't
 // care what the button says.
-const MODE_LABEL = { draw: 'Draw', fill: 'Paint', move: 'Move' };
+const MODE_LABEL = { draw: 'Draw', fill: 'Paint', move: 'Move', path: 'Path' };
+
+// Everything the animation is configured to do. Separate from `state` because
+// it is a way of playing the drawing rather than part of it: it saves locally,
+// stays out of share links, and is what a preset slot copies.
+const anim = {
+  bpm: 128,
+  countIn: false,
+  move: 'none',                 // none | point | shape | path
+  moveDiv: 1,
+  counts: { point: 3, shape: 2 },
+  leash: 2,
+  drop: true,
+  looks: {
+    cycle:  { on: false, div: 4, ripple: false },
+    pop:    { on: false, div: 1 },
+    strobe: { on: false, div: 4 },
+    trace:  { on: false, div: 1, n: 1, follow: false },
+    reveal: { on: false, div: 1 },
+  },
+};
 
 const canvas = document.getElementById('sheet');
 const ctx = canvas.getContext('2d');
@@ -61,11 +94,13 @@ let faces = [];
 let facesStale = true;
 let hover = null;                         // rubber-band target (mouse only)
 let drag = null;                          // { at: [x, y] } while a node is being moved
-let dance = null;                         // { resting, timer } while dancing
+let draft = null;                         // { pts, closed } while a path is being laid
+let perf = null;                          // the running performance, or nothing
 
 const toGrid = (px, py) => [(px - ox) / CM, (py - oy) / CM];
 const toPx = (gx, gy) => [ox + gx * CM, oy + gy * CM];
 const same = (a, b) => a[0] === b[0] && a[1] === b[1];
+const nodeKey = ([x, y]) => `${x},${y}`;
 
 function getFaces() {
   if (facesStale) {
@@ -109,9 +144,34 @@ export function moveNodes(deltas) {
       moved[to ? `${to[0]},${to[1]}` : at] = c;
     }
     state.nodeColors = moved;
+    // A path is keyed the same way and follows a dragged node for the same
+    // reason — but only when the user is doing the dragging. During a
+    // performance the node is being moved BY its path, and carrying the path
+    // along with it would have the route chase its own walker down the sheet.
+    if (!perf) remapPaths(deltas);
     facesStale = true;
   }
   return touched;
+}
+
+function remapPaths(deltas) {
+  const moved = {};
+  for (const [at, path] of Object.entries(state.paths)) {
+    const to = deltas.get(at);
+    if (!to) { moved[at] = path; continue; }
+    // The anchor is the route's first point, so moving the node moves the whole
+    // route with it rather than leaving the node attached to a route it has
+    // walked away from.
+    const [dx, dy] = [to[0] - path.pts[0][0], to[1] - path.pts[0][1]];
+    const pts = path.pts.map(([x, y]) => [x + dx, y + dy]);
+    if (pts.every(([x, y]) => x >= 0 && y >= 0 && x < cols && y < rows)) {
+      moved[nodeKey(to)] = { ...path, pts };
+    }
+    // A route that would leave the sheet is dropped rather than clipped: half a
+    // route is a different route, and a silent change of shape is worse than
+    // losing one you can draw again.
+  }
+  state.paths = moved;
 }
 
 export function moveNode([fx, fy], to) {
@@ -139,22 +199,19 @@ export function moveShape(key, delta) {
   const shape = shapes().find((s) => s.key === key);
   if (!shape) return false;
   const deltas = translate(shape.nodes, delta, cols, rows);
-  if (!deltas) return false;                      // would leave the sheet
+  if (!deltas) return false;
 
-  // The guard below only notices a move that re-cuts a pocket. Two shapes
-  // meeting corner to corner cut nothing — they just weld, and thereafter drag
-  // each other around and past their leash. The point dance already refuses
-  // this for single nodes; this is the same rule, shape-sized.
+  // Two nodes on one grid point weld permanently (see invariant 2), and two
+  // shapes meeting corner to corner cut no edge, so the topology check below
+  // would wave it through. Refuse before it happens.
   if (wouldWeld(deltas, occupiedNodes())) return false;
 
   const before = JSON.stringify(state.lines);
-  if (!moveNodes(deltas)) return false;
-
-  // A step that crosses another line re-cuts the pocket, and the new face is
-  // keyed off a different set of bounding lines — so the color would be left
-  // behind on a pocket that no longer exists. Refusing the step is cheaper than
-  // re-homing the fill, and keeps the shape a shape.
-  if (!getFaces().some((f) => f.key === key)) {
+  moveNodes(deltas);
+  // A step that re-cuts the pocket re-keys the face, which strands the fill.
+  const stillThere = computeFaces(state.lines.map((l, id) => ({ id, a: [l[0], l[1]], b: [l[2], l[3]] })))
+    .some((f) => f.key === key);
+  if (!stillThere) {
     state.lines = JSON.parse(before);
     facesStale = true;
     return false;
@@ -162,14 +219,15 @@ export function moveShape(key, delta) {
   return true;
 }
 
-// Snapshots, not an operation log: uniform across draw, fill and move, and a
-// drag undoes as one step because the snapshot is taken when it starts.
+// --- undo ------------------------------------------------------------------
+
 const undoStack = [];
 function snapshot() {
   undoStack.push(JSON.stringify({
-    l: state.lines, f: state.fills, lc: state.lineColors, nc: state.nodeColors,
+    l: state.lines, f: state.fills,
+    lc: state.lineColors, nc: state.nodeColors, pa: state.paths,
   }));
-  if (undoStack.length > 50) undoStack.shift();
+  if (undoStack.length > 60) undoStack.shift();
 }
 
 // --- rendering -------------------------------------------------------------
@@ -177,22 +235,73 @@ function snapshot() {
 let frame = 0;
 const draw = () => { frame ||= requestAnimationFrame(render); };
 
+// Which looks need a frame of their own rather than one per beat. The colour
+// cycle and the reveal change only when a beat fires, so they are free; a pop
+// decays, a strobe expires and a tracer travels, so those three keep the loop
+// turning. When none of them is on, rendering goes back to being the
+// once-per-change thing it has always been, and an idle page costs nothing.
+const continuous = () => !!perf && (anim.looks.pop.on || anim.looks.strobe.on || anim.looks.trace.on);
+
+// How the looks read this frame. Gathered in one place so render() reads a plain
+// description of what to draw rather than recomputing envelopes inline, and so
+// that with no performance running every value here is the identity.
+function lookNow(now) {
+  const L = anim.looks;
+  const beat = beatMs(anim.bpm);
+  const since = (name) => now - (perf?.firedAt[name] ?? -Infinity);
+  const live = (name) => !!perf && L[name].on;
+  return {
+    shift: live('cycle') ? fireCount(perf.beat, L.cycle.div) - 1 : 0,
+    ripple: live('cycle') && L.cycle.ripple,
+    pop: live('pop') ? popScale(since('pop'), beat, POP) : 1,
+    strobe: live('strobe') && strobing(since('strobe'), beat),
+    shown: live('reveal')
+      ? revealed(fireCount(perf.beat, L.reveal.div), state.lines.length)
+      : state.lines.length,
+  };
+}
+
 function render() {
   frame = 0;
+  const now = performance.now();
   const w = canvas.clientWidth, h = canvas.clientHeight;
   ctx.clearRect(0, 0, w, h);
+  const look = lookNow(now);
 
-  for (const f of getFaces()) {
-    const c = state.fills[f.key];
-    if (c === undefined) continue;
-    ctx.fillStyle = colorOf(c);
-    ctx.beginPath();
-    f.pts.forEach(([x, y], i) => {
-      const [px, py] = toPx(x, y);
-      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
-    });
-    ctx.closePath();
-    ctx.fill();
+  // Ripple staggers the colour change by where a shape sits, so the cycle
+  // travels across the drawing rather than landing everywhere at once. Reading
+  // order rather than face order because face order is an artefact of how the
+  // geometry was walked and would look arbitrary.
+  const rip = new Map();
+  if (look.ripple) {
+    getFaces()
+      .filter((f) => state.fills[f.key] !== undefined)
+      .map((f) => [f, centroid(f.pts)])
+      .sort((a, b) => a[1][1] - b[1][1] || a[1][0] - b[1][0])
+      .forEach(([f], i) => rip.set(f.key, i));
+  }
+  const tint = (c, key) => colorOf(shiftColor(c, look.shift + (rip.get(key) || 0), INK));
+
+  // The strobe knocks the fills out to paper for a sliver of the beat, leaving
+  // the lines, so the drawing reads as a wireframe of itself for an instant.
+  if (!look.strobe) {
+    const popping = perf && anim.looks.pop.on && look.pop !== 1;
+    for (const f of getFaces()) {
+      const c = state.fills[f.key];
+      if (c === undefined) continue;
+      // A pocket waits for every line that bounds it, or it would colour itself
+      // in across a gap the reveal hasn't drawn yet.
+      if (!faceReady(f, look.shown)) continue;
+      const pts = popping && chosenFor(f.key) ? scaleAbout(f.pts, look.pop) : f.pts;
+      ctx.fillStyle = tint(c, f.key);
+      ctx.beginPath();
+      pts.forEach(([x, y], i) => {
+        const [px, py] = toPx(x, y);
+        i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      });
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   // Dots off is just a quieter sheet — the grid still snaps, it's only hidden.
@@ -213,12 +322,13 @@ function render() {
   ctx.lineCap = 'round';
   const byColor = new Map();
   state.lines.forEach((l, id) => {
+    if (id >= look.shown) return;   // the reveal hasn't got to this one yet
     const c = state.lineColors[id] ?? INK;
     if (!byColor.has(c)) byColor.set(c, []);
     byColor.get(c).push(l);
   });
   for (const [c, group] of byColor) {
-    ctx.strokeStyle = colorOf(c);
+    ctx.strokeStyle = tint(c);
     ctx.beginPath();
     for (const [ax, ay, bx, by] of group) {
       ctx.moveTo(...toPx(ax, ay));
@@ -228,20 +338,33 @@ function render() {
   }
 
   // Painted nodes sit on top of the lines that meet them, so a junction reads
-  // as one dot rather than as whatever crosses it last. While a dance is
-  // running the paint is still keyed to the resting node, so it's looked up
-  // through dance.at to find where that node is this beat.
+  // as one dot rather than as whatever crosses it last.
+  //
+  // The key is always where the paint is *now*: moveNodes carries a node's
+  // colour along with it (invariant 5), so during a performance nodeColors has
+  // already been remapped to this beat's positions. This used to go through
+  // perf.at, which maps resting positions to current ones — a lookup that was
+  // redundant for a node that hadn't moved and wrong for one that had landed on
+  // a point another mover had just vacated, since that key is in the map and
+  // answers with somebody else's destination.
   for (const [at, c] of Object.entries(state.nodeColors)) {
-    const here = dance?.at?.get(at) ?? at.split(',').map(Number);
+    const here = at.split(',').map(Number);
     const [px, py] = toPx(here[0], here[1]);
     ctx.beginPath();
     ctx.arc(px, py, 6, 0, Math.PI * 2);
-    ctx.fillStyle = colorOf(c);
+    ctx.fillStyle = tint(c);
     ctx.fill();
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = theme.ink;
     ctx.stroke();
   }
+
+  if (perf && anim.looks.trace.on) drawTracers(now);
+  // Routes show while you're laying them and nowhere else — not once the clock
+  // is running, even though laying one and pressing play without leaving Path
+  // mode is the obvious way to use this. They are scaffolding for the
+  // animation, and scaffolding in the frame is scaffolding in the reel.
+  if (state.mode === 'path' && !perf) drawPaths();
 
   // In move mode the nodes you can actually grab need to be visible.
   if (state.mode === 'move') {
@@ -259,15 +382,15 @@ function render() {
     if (drag) ring(drag.at, '#c0392b', true);
   }
 
-  // Who you've picked to dance, in that dance's colour.
-  if (dance && dance.chosen.size) {
-    if (dance.kind === 'shape') {
+  // Who you've picked to dance, in that layer's colour.
+  if (perf && perf.chosen.size) {
+    if (perf.move === 'shape') {
       ctx.save();
       ctx.setLineDash([6, 4]);
       ctx.lineWidth = 2.5;
       ctx.strokeStyle = '#1f8a80';
       for (const f of getFaces()) {
-        if (!dance.chosen.has(f.key)) continue;
+        if (!perf.chosen.has(f.key)) continue;
         ctx.beginPath();
         f.pts.forEach(([x, y], i) => {
           const [px, py] = toPx(x, y);
@@ -278,8 +401,8 @@ function render() {
       }
       ctx.restore();
     } else {
-      for (const k of dance.chosen) {
-        const at = dance.at.get(k);
+      for (const k of perf.chosen) {
+        const at = perf.at.get(k);
         if (at) ring(at, '#7a4fbf', true);
       }
     }
@@ -300,6 +423,22 @@ function render() {
     ring(last, theme.ink, true);
     if (state.chain.length >= 3) ring(first, theme.ink, false);
   }
+
+  // A look with an envelope keeps the loop turning; the rest of the app goes
+  // back to drawing once per change.
+  if (continuous()) draw();
+}
+
+function centroid(pts) {
+  let x = 0, y = 0;
+  for (const p of pts) { x += p[0]; y += p[1]; }
+  return [x / pts.length, y / pts.length];
+}
+
+// Pop respects the same picking the movement layers do: with nothing chosen
+// every filled pocket pulses, and once you've tapped some, only those.
+function chosenFor(key) {
+  return !perf || !perf.chosen.size || perf.move !== 'shape' ? true : perf.chosen.has(key);
 }
 
 function ring([gx, gy], color, filled) {
@@ -310,6 +449,140 @@ function ring([gx, gy], color, filled) {
   ctx.strokeStyle = color;
   ctx.stroke();
   if (filled) { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill(); }
+}
+
+// --- tracers ---------------------------------------------------------------
+//
+// A glowing point running the drawing. Its position is fractional, and because
+// it is never stored it never has to survive codec.js — which is why this is
+// smooth while everything that IS stored stays snapped to the grid.
+
+function drawTracers(now) {
+  const cfg = anim.looks.trace;
+  const adj = adjacency(state.lines);
+  const dt = Math.min(120, now - (perf.tracedAt || now));   // a backgrounded tab must not teleport them
+  perf.tracedAt = now;
+  const steps = dt / (beatMs(anim.bpm) * cfg.div);
+
+  while (perf.tracers.length > cfg.n) perf.tracers.pop();
+  while (perf.tracers.length < cfg.n) {
+    const t = spawnTracer(adj);
+    if (!t) break;
+    perf.tracers.push(t);
+  }
+
+  const color = colorOf(state.color);
+  for (const t of perf.tracers) {
+    // The ground can go: a line undone, or a movement layer pulling the node
+    // out from under it. Restart somewhere real rather than gliding into space.
+    if (!t.route && !onGraph(t, adj)) {
+      const fresh = spawnTracer(adj);
+      if (!fresh) continue;
+      Object.assign(t, fresh);
+    }
+    Object.assign(t, t.route ? alongRoute(t, steps) : advance(t, steps, adj));
+    const at = positionOf(t);
+    t.trail.push(at);
+    if (t.trail.length > 22) t.trail.shift();
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = color;
+    for (let i = 1; i < t.trail.length; i++) {
+      const k = i / t.trail.length;
+      ctx.globalAlpha = k * 0.5;
+      ctx.lineWidth = 1 + 3 * k;
+      ctx.beginPath();
+      ctx.moveTo(...toPx(...t.trail[i - 1]));
+      ctx.lineTo(...toPx(...t.trail[i]));
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = color;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(...toPx(...at), 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fill();   // twice, because one pass of shadow on white is barely a glow
+    ctx.restore();
+  }
+}
+
+// Follow mode puts tracers on the authored routes instead of letting them roam,
+// so the same drawing gesture feeds both the walking node and the light that
+// runs ahead of it. A route tracer carries the route it is on rather than
+// looking its next edge up in the graph — a route may cross bare grid the lines
+// never reach, and a tracer that fell back to the graph at the first junction
+// would abandon the route it was asked to run.
+function spawnTracer(adj) {
+  const cfg = anim.looks.trace;
+  const routes = Object.values(state.paths).filter((r) => r.pts.length >= 2);
+  if (cfg.follow && routes.length) {
+    const route = routes[Math.floor(Math.random() * routes.length)];
+    const [from, to] = segmentAt(route, 0, 1);
+    return { route, i: 0, dir: 1, from, to, t: 0, trail: [] };
+  }
+  const t = spawn(adj);
+  return t && { ...t, trail: [] };
+}
+
+// The same walk the node itself takes — closed routes loop, open ones ping-pong
+// — so the light and the walker trace the same figure.
+function alongRoute(t, steps) {
+  let { i, dir, t: at } = t;
+  at += steps;
+  let guard = 64;
+  while (at >= 1 && guard--) {
+    at -= 1;
+    [i, dir] = step(i, dir, t.route.pts.length, t.route.closed);
+  }
+  const [from, to] = segmentAt(t.route, i, dir);
+  return { i, dir, from, to, t: Math.min(at, 1) };
+}
+
+// --- routes ----------------------------------------------------------------
+
+function drawPaths() {
+  const all = [...Object.values(state.paths), ...(draft ? [draft] : [])];
+  if (!all.length) return;
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  const accent = getComputedStyle(document.body).getPropertyValue('--path').trim() || '#b8562f';
+  ctx.strokeStyle = accent;
+  ctx.fillStyle = accent;
+
+  for (const p of all) {
+    if (p.pts.length < 2) {
+      // A route with only its anchor: mark the node so a half-laid path is
+      // visible rather than being a gesture with nothing on screen.
+      ctx.setLineDash([]);
+      ring(p.pts[0], accent, false);
+      ctx.setLineDash([5, 5]);
+      continue;
+    }
+    ctx.beginPath();
+    p.pts.forEach(([x, y], i) => {
+      const [px, py] = toPx(x, y);
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    });
+    if (p.closed) ctx.closePath();
+    ctx.stroke();
+
+    ctx.save();
+    ctx.setLineDash([]);
+    for (const [x, y] of p.pts.slice(1)) {
+      ctx.beginPath();
+      ctx.arc(...toPx(x, y), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // The anchor is the node that walks, so it gets a ring rather than a dot.
+    ring(p.pts[0], accent, true);
+    ctx.restore();
+  }
+  ctx.restore();
 }
 
 function resize() {
@@ -328,35 +601,37 @@ function resize() {
 
 // --- interaction -----------------------------------------------------------
 
-// Tapping during a dance picks who dances. An empty set means the slider is in
-// charge; once anything is picked, only those move and the slider steps aside.
+// Tapping during a performance picks who moves. An empty set means the slider is
+// in charge; once anything is picked, only those move and the slider steps aside.
 // The node you tap is the one under your finger *now*, which during a point
-// dance is not where it rests — dance.at is what maps the two.
+// dance is not where it rests — perf.at is what maps the two.
 function pickDancer(gx, gy) {
-  const toggle = (k) => (dance.chosen.has(k) ? dance.chosen.delete(k) : dance.chosen.add(k));
+  const toggle = (k) => (perf.chosen.has(k) ? perf.chosen.delete(k) : perf.chosen.add(k));
 
-  if (dance.kind === 'shape') {
+  if (perf.move === 'shape') {
     const f = faceAt(getFaces(), gx, gy);
     if (!f || state.fills[f.key] === undefined) return;
     toggle(f.key);
-  } else {
+  } else if (perf.move === 'point') {
     const n = nearestNode(gx, gy);
     if (!n) return;
-    const hit = [...dance.at].find(([, [x, y]]) => x === n[0] && y === n[1]);
+    const hit = [...perf.at].find(([, [x, y]]) => x === n[0] && y === n[1]);
     if (!hit) return;
     toggle(hit[0]);
+  } else {
+    return;   // routes are chosen by drawing them, and the looks move everything
   }
-  danceBar.classList.toggle('picking', dance.chosen.size > 0);
+  danceBar.classList.toggle('picking', perf.chosen.size > 0);
   draw();
 }
 
 function tap(px, py) {
   const [gx, gy] = toGrid(px, py);
 
-  if (dance) return pickDancer(gx, gy);
+  if (perf) return pickDancer(gx, gy);
   if (state.mode === 'move') return;   // move mode works by dragging, not tapping
-
   if (state.mode === 'fill') return paint(gx, gy);
+  if (state.mode === 'path') return layPath(gx, gy);
 
   const n = nearestNode(gx, gy);
   if (!n) return;
@@ -372,6 +647,49 @@ function tap(px, py) {
     addLine(last, n);
     state.chain.push(n);
   }
+  save();
+  draw();
+}
+
+// Laying a route reuses the rules Draw already taught, verbatim: tap the point
+// you're standing on to finish, tap the first one to close the loop. The only
+// new thing is where you start — on a node with lines on it, because a route
+// moves a node and a route anchored to bare grid would move nothing.
+//
+// Starting on a node that already has a route picks that route up for editing,
+// so tapping an anchor twice (start, then finish with nothing added) is how a
+// route is deleted. Same gesture as cancelling a chain.
+function layPath(gx, gy) {
+  const n = nearestNode(gx, gy);
+  if (!n) return;
+
+  if (!draft) {
+    if (!occupiedNodes().has(nodeKey(n))) return toast('Start a route on a node with lines on it.');
+    const existing = state.paths[nodeKey(n)];
+    snapshot();
+    if (existing) {
+      delete state.paths[nodeKey(n)];
+      draft = { pts: [...existing.pts], closed: false };
+    } else {
+      draft = { pts: [n], closed: false };
+    }
+    return draw();
+  }
+
+  const first = draft.pts[0], last = draft.pts.at(-1);
+  if (same(n, last)) return finishPath();
+  if (draft.pts.length >= 3 && same(n, first)) {
+    draft.closed = true;
+    return finishPath();
+  }
+  draft.pts.push(n);
+  draw();
+}
+
+function finishPath() {
+  if (draft.pts.length >= 2) state.paths[nodeKey(draft.pts[0])] = draft;
+  else undoStack.pop();          // picked up and put straight back down; not a step
+  draft = null;
   save();
   draw();
 }
@@ -444,9 +762,9 @@ const local = (e) => {
 
 canvas.addEventListener('pointerdown', (e) => {
   down = { x: e.clientX, y: e.clientY, t: Date.now() };
-  // A tap during a dance picks dancers; a drag would only be thrown away by the
-  // snap back, so nothing past here runs while one is playing.
-  if (dance || state.mode !== 'move') return;
+  // A tap during a performance picks dancers; a drag would only be thrown away
+  // by the snap back, so nothing past here runs while one is playing.
+  if (perf || state.mode !== 'move') return;
   const n = nearestNode(...local(e));
   if (!n || !occupiedNodes().has(`${n[0]},${n[1]}`)) return;
   snapshot();
@@ -461,7 +779,7 @@ canvas.addEventListener('pointermove', (e) => {
     if (n && moveNode(drag.at, n)) { drag.at = n; drag.moved = true; draw(); }
     return;
   }
-  if (e.pointerType !== 'mouse' || !state.chain) return;
+  if (e.pointerType !== 'mouse' || !(state.chain || draft)) return;
   const n = nearestNode(...local(e));
   const changed = !!n !== !!hover || (n && hover && !same(n, hover));
   hover = n;
@@ -505,16 +823,16 @@ let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    // Never write a danced frame. While a dance runs, state.lines holds a
+    // Never write a performed frame. While one runs, state.lines holds a
     // displaced drawing that the snap-back is about to throw away, so writing it
     // would leave disk disagreeing with the screen and hand back the wobble on
     // the next load. The resting copy is what the user actually drew.
-    const l = dance ? JSON.parse(dance.resting) : state.lines;
-    const nc = dance ? JSON.parse(dance.restingPaint) : state.nodeColors;
+    const l = perf ? JSON.parse(perf.resting) : state.lines;
+    const nc = perf ? JSON.parse(perf.restingPaint) : state.nodeColors;
     try {
       localStorage.setItem(STORE, JSON.stringify({
-        l, f: state.fills, d: state.dots, p: state.palette, b: +bpm.value,
-        lc: state.lineColors, nc,
+        l, f: state.fills, d: state.dots, p: state.palette,
+        lc: state.lineColors, nc, pa: state.paths, a: anim,
       }));
     } catch {}
   }, 250);
@@ -523,9 +841,7 @@ function save() {
 function fromLocal() {
   try {
     const j = JSON.parse(localStorage.getItem(STORE));
-    return Array.isArray(j?.l)
-      ? { l: j.l, f: j.f || {}, d: j.d, p: j.p, b: j.b, lc: j.lc, nc: j.nc }
-      : null;
+    return Array.isArray(j?.l) ? j : null;
   } catch { return null; }
 }
 
@@ -545,23 +861,46 @@ function load() {
       }
     }
   }
-  src ||= fromLocal();
+  const local = fromLocal();
+  // How the drawing is animated is a local preference like the dots and the
+  // tempo before it: a link carries a drawing, not a way of playing it.
+  if (local?.a) adoptAnim(local.a);
+  src ||= local;
   if (!src) return;
   state.lines = src.l;
-  state.fills = src.f;
+  state.fills = src.f || {};
   state.lineColors = src.lc || {};
   state.nodeColors = src.nc || {};
+  state.paths = src.pa || {};
   state.dots = src.d !== false;   // a shared link carries no preference; dots stay on
   // A link written before palettes existed, or one on the stock colors, carries
   // no palette section — those drawings are meant to arrive in the defaults.
   if (Array.isArray(src.p) && src.p.length === PALETTE.length) state.palette = src.p;
-  // Tempo is a preference like the dots, so it is local only — a link shouldn't
-  // set the pace someone else's drawing runs at.
-  if (src.b >= +bpm.min && src.b <= +bpm.max) {
-    bpm.value = src.b;
-    bpmOut.textContent = src.b;
-  }
   facesStale = true;
+}
+
+// A stored config is merged field by field rather than assigned wholesale, so a
+// config written before a look existed simply keeps that look's defaults instead
+// of arriving with it missing.
+function adoptAnim(saved) {
+  if (typeof saved !== 'object' || !saved) return;
+  if (saved.bpm >= MIN_BPM && saved.bpm <= MAX_BPM) anim.bpm = clampBpm(saved.bpm);
+  for (const k of ['countIn', 'drop']) if (typeof saved[k] === 'boolean') anim[k] = saved[k];
+  if (MOVES.includes(saved.move)) anim.move = saved.move;
+  if (DIVS.includes(saved.moveDiv)) anim.moveDiv = saved.moveDiv;
+  if (saved.leash >= 1 && saved.leash <= 4) anim.leash = saved.leash;
+  if (saved.counts) for (const k of Object.keys(anim.counts)) {
+    if (Number.isInteger(saved.counts[k])) anim.counts[k] = saved.counts[k];
+  }
+  for (const [name, cfg] of Object.entries(anim.looks)) {
+    const s = saved.looks?.[name];
+    if (!s) continue;
+    if (typeof s.on === 'boolean') cfg.on = s.on;
+    if (DIVS.includes(s.div)) cfg.div = s.div;
+    if (typeof s.ripple === 'boolean') cfg.ripple = s.ripple;
+    if (typeof s.follow === 'boolean') cfg.follow = s.follow;
+    if (Number.isInteger(s.n) && s.n >= 1 && s.n <= 5) cfg.n = s.n;
+  }
 }
 
 // --- toolbar ---------------------------------------------------------------
@@ -592,7 +931,7 @@ function paintSwatches() {
   const name = i === INK ? 'Ink' : `Color ${i + 1}`;
   b.setAttribute('aria-label', name);
   b.title = name;
-  b.onclick = () => { state.color = i; paintSwatches(); };
+  b.onclick = () => { state.color = i; paintSwatches(); draw(); };
   swatches.append(b);
   if (i === INK) return;   // ink isn't one of the six the palette panel edits
 
@@ -611,12 +950,11 @@ function paintSwatches() {
   };
   pcells.append(cell);
 });
-paintSwatches();
 
 function showPalette(on) {
   palettePanel.hidden = !on;
   editBtn.setAttribute('aria-pressed', String(on));
-  document.getElementById('dancebar').classList.toggle('stepped', on);
+  danceBar.classList.toggle('stepped', on);
 }
 editBtn.onclick = () => showPalette(palettePanel.hidden);
 
@@ -629,11 +967,12 @@ document.getElementById('palettereset').onclick = () => {
 
 const modeBtn = document.getElementById('mode');
 modeBtn.onclick = () => {
-  stopDance();
+  stopPerf();
   state.mode = MODES[(MODES.indexOf(state.mode) + 1) % MODES.length];
   modeBtn.dataset.mode = state.mode;
   modeBtn.textContent = MODE_LABEL[state.mode];
   state.chain = null;
+  if (draft) finishPath();
   hover = null;
   drag = null;
   draw();
@@ -644,8 +983,8 @@ function paintDotsBtn() {
   dotsBtn.setAttribute('aria-pressed', String(state.dots));
   dotsBtn.title = state.dots ? 'Hide the dot grid' : 'Show the dot grid';
 }
-// Fine to toggle mid-dance: it changes what's painted, never the drawing, and
-// save() knows to write the resting copy rather than the frame on screen.
+// Fine to toggle mid-performance: it changes what's painted, never the drawing,
+// and save() knows to write the resting copy rather than the frame on screen.
 dotsBtn.onclick = () => {
   state.dots = !state.dots;
   paintDotsBtn();
@@ -656,154 +995,511 @@ dotsBtn.onclick = () => {
 function undo() {
   const prev = undoStack.pop();
   if (!prev) return;
-  const { l, f, lc, nc } = JSON.parse(prev);
+  const { l, f, lc, nc, pa } = JSON.parse(prev);
   state.lines = l;
   state.fills = f;
   state.lineColors = lc || {};
   state.nodeColors = nc || {};
+  state.paths = pa || {};
   state.chain = null;
+  draft = null;
   facesStale = true;
   save();
   draw();
 }
 
-document.getElementById('undo').onclick = () => { stopDance(); undo(); };
+document.getElementById('undo').onclick = () => { stopPerf(); undo(); };
 
-// --- dance -----------------------------------------------------------------
+// --- the clock -------------------------------------------------------------
+//
+// One clock, many layers. Everything that animates subscribes to the same beat
+// and says how often it wants one, which is the difference between a drawing
+// that twitches and one that looks arranged: the colour can turn over on the
+// bar while the shapes drift on the beat.
+//
+// Layers come in two kinds, and the split is what makes stacking safe:
+//
+//   movement  mutates state.lines, so exactly one may run. They all own every
+//             node, and two of them would each be restoring over the other.
+//             Snapshot on start, restore on stop.
+//   looks     change how the drawing is *drawn* and never touch state, so any
+//             number can run at once, over any movement layer, with nothing to
+//             restore and nothing that can reach disk.
 
-const danceBtn = document.getElementById('dance');
-const shapeBtn = document.getElementById('shapedance');
+const MOVES = ['none', 'point', 'shape', 'path'];
+const MOVE_LABEL = { point: 'Dancers', shape: 'Movers' };
+const MOVE_MAX = { point: 12, shape: 6 };
+
 const danceBar = document.getElementById('dancebar');
 const count = document.getElementById('count');
+const countGroup = document.getElementById('countgroup');
 const countLabel = document.getElementById('countlabel');
 const countOut = document.getElementById('countout');
-const bpm = document.getElementById('bpm');
 const bpmOut = document.getElementById('bpmout');
+const dBpmOut = document.getElementById('dbpmout');
+const beatDot = document.getElementById('beatdot');
+const countdown = document.getElementById('countdown');
+const playBtn = document.getElementById('play');
 
-// A tick is a beat, so the speed control is a tempo. 170 is where the dance sat
-// before it was adjustable (a flat 350 ms), kept as the default so the feel
-// doesn't move under anyone.
-const beat = () => Math.round(60000 / +bpm.value);
-
-// How far from home a shape may drift. Fixed rather than exposed: the slider
-// is better spent on how many shapes move, which is what costs anything.
-const LEASH = 2;
-
-// Two dances. Both return the drawing exactly as they found it, but they get
-// there differently, because what they move differs.
-//
-// The point dance picks loose nodes and nudges them, pulling the lines out of
-// shape. It re-derives from the resting drawing every tick, which is what keeps
+// The point layer picks loose nodes and nudges them, pulling the lines out of
+// shape. It re-derives from the resting drawing every beat, which is what keeps
 // a random walk from carrying the drawing away.
-//
-// The shape dance moves a whole filled pocket at a time, so the shape holds its
-// form and the web around it gives. It can't re-derive from rest each tick: that
-// would mean re-applying every shape's offset every time, so the cost would
-// track how many shapes exist rather than how many are moving, and the Movers
-// slider would buy nothing. Instead each shape carries an offset that never
-// leaves the leash, so it stays near home by construction, and stopping restores
-// the resting drawing outright.
-// The count slider means a different thing per dance and keeps its own value,
-// since going back to a dance with someone else's number would be a surprise.
-const KINDS = {
-  point: { btn: danceBtn, cls: 'dancing', label: 'Dancers', max: 12, count: 3 },
-  shape: { btn: shapeBtn, cls: 'dancing-shapes', label: 'Movers', max: 6, count: 2 },
-};
-
-function danceTick() {
-  state.lines = JSON.parse(dance.resting);
-  state.nodeColors = JSON.parse(dance.restingPaint);
+function pointTick() {
+  state.lines = JSON.parse(perf.resting);
+  state.nodeColors = JSON.parse(perf.restingPaint);
   const nodes = [...occupiedNodes()].map((k) => k.split(',').map(Number));
-  const only = dance.chosen.size ? dance.chosen : null;
-  const moves = pickMoves(nodes, only ? only.size : +count.value, cols, rows, Math.random, only);
+  const only = perf.chosen.size ? perf.chosen : null;
+  const moves = pickMoves(nodes, only ? only.size : anim.counts.point, cols, rows, Math.random, only);
 
   // Where each resting node ended up this beat. A tap has to select the node it
   // landed on, not whatever happens to rest under the finger, and the highlight
   // has to follow the node rather than stay behind at its resting place.
-  dance.at = new Map(nodes.map(([x, y]) => [`${x},${y}`, [x, y]]));
+  perf.at = new Map(nodes.map(([x, y]) => [`${x},${y}`, [x, y]]));
   for (const [from, to] of moves) {
     moveNode(from, to);
-    dance.at.set(`${from[0]},${from[1]}`, to);
+    perf.at.set(`${from[0]},${from[1]}`, to);
   }
   facesStale = true;
-  draw();
 }
 
-// Only the shapes picked this tick are touched; the rest are already where they
-// belong, so they cost nothing. The recorded offset only advances on a step the
-// guard allowed, which keeps it honest about where the shape actually is.
+// The shape layer moves a whole filled pocket at a time, so the shape holds its
+// form and the web around it gives. It can't re-derive from rest each beat: that
+// would mean re-applying every shape's offset every time, so the cost would
+// track how many shapes exist rather than how many are moving, and the count
+// slider would buy nothing — measured, 95 ms a beat at 32 filled pockets against
+// a 350 ms budget, versus 8 ms when only two shapes move. Instead each shape
+// carries an offset that never leaves the leash, so it stays near home by
+// construction, and stopping restores the resting drawing outright.
 function shapeTick() {
   const all = shapes();
-  const picked = dance.chosen.size ? all.map((s) => s.key).filter((k) => dance.chosen.has(k)) : null;
-  const moving = new Set(picked ?? pickDancers(all.map((s) => s.key), +count.value));
+  const picked = perf.chosen.size ? all.map((s) => s.key).filter((k) => perf.chosen.has(k)) : null;
+  const moving = new Set(picked ?? pickDancers(all.map((s) => s.key), anim.counts.shape));
   for (const s of all) {
     if (!moving.has(s.key)) continue;
-    const from = dance.offsets.get(s.key) || [0, 0];
-    const to = wander(from, LEASH);
+    const from = perf.offsets.get(s.key) || [0, 0];
+    const to = wander(from, anim.leash);
     const step = [to[0] - from[0], to[1] - from[1]];
-    if ((step[0] || step[1]) && moveShape(s.key, step)) dance.offsets.set(s.key, to);
+    if ((step[0] || step[1]) && moveShape(s.key, step)) perf.offsets.set(s.key, to);
   }
-  draw();
 }
 
-function startDance(kind) {
-  if (dance || !state.lines.length) return;
-  // Shape dance has nothing to move until something is colored, and silently
-  // doing nothing would read as a broken button.
-  if (kind === 'shape' && !shapes().length) {
-    return toast('Shape dance moves filled pockets — fill one first.');
+// Authored routes: every walker takes one hop along its own. A hop that would
+// weld two nodes together, or leave the sheet, is refused and the walker stalls
+// where it is until the next beat — which on a four-to-the-floor reads as a held
+// note rather than as a fault.
+function pathTick() {
+  const occupied = occupiedNodes();
+  for (const w of perf.walkers) {
+    const m = nextMove(w);
+    if (!m) continue;
+    const deltas = new Map([[nodeKey(m.from), m.to]]);
+    if (wouldWeld(deltas, occupied)) continue;
+    if (m.to[0] < 0 || m.to[1] < 0 || m.to[0] >= cols || m.to[1] >= rows) continue;
+    if (moveNodes(deltas)) m.commit();
   }
-  const k = KINDS[kind];
-  toastEl.classList.remove('show');   // the pill lands where the toast sits
-  countLabel.textContent = k.label;
-  count.max = k.max;
-  count.value = k.count;
-  countOut.textContent = k.count;
-  danceBar.dataset.kind = kind;
-  danceBar.classList.remove('picking');
-  danceBar.hidden = false;
+  perf.at = new Map([...occupiedNodes()].map((k) => [k, k.split(',').map(Number)]));
+}
 
-  // `chosen` starts empty, meaning "let the slider decide". Tapping fills it,
-  // and switching the dance off and on again is how you empty it.
-  dance = { kind, resting: JSON.stringify(state.lines),
-            restingPaint: JSON.stringify(state.nodeColors),
-            offsets: new Map(), timer: 0,
-            chosen: new Set(), at: new Map(),
-            run: kind === 'shape' ? shapeTick : danceTick };
-  k.btn.classList.add(k.cls);
-  k.btn.setAttribute('aria-pressed', 'true');
-  state.chain = null;
-  drag = null;
-  dance.run();
-  if (!ears) schedule();   // while listening, the music books the beats
+const MOVE_TICK = { point: pointTick, shape: shapeTick, path: pathTick };
+
+// One beat. Movement first so the looks read a settled drawing, then every look
+// whose division comes up records that it fired — the envelopes in looks.js are
+// all functions of how long ago that was.
+function runBeat() {
+  const b = perf.beat;
+  if (b >= 0) {
+    if (anim.move !== 'none' && fires(b, anim.moveDiv)) MOVE_TICK[anim.move]();
+    const now = performance.now();
+    for (const [name, cfg] of Object.entries(anim.looks)) {
+      if (cfg.on && fires(b, cfg.div)) perf.firedAt[name] = now;
+    }
+  }
+  flashBeat();
+  draw();
 }
 
 // Each beat books the next one rather than running on a fixed interval, so a
-// tick that overruns delays the following beat instead of stacking up behind
+// beat that overruns delays the following one instead of stacking up behind
 // it — and a tempo change simply lands on the next beat, with nothing to reset.
 function schedule() {
-  dance.timer = setTimeout(() => {
-    if (!dance) return;
-    dance.run();
+  perf.timer = setTimeout(() => {
+    if (!perf) return;
+    perf.beat++;
+    runBeat();
     schedule();
-  }, beat());
+  }, beatMs(anim.bpm));
 }
 
-function stopDance() {
-  if (!dance) return;
-  const k = KINDS[dance.kind];
-  clearTimeout(dance.timer);
-  state.lines = JSON.parse(dance.resting);   // snap back to where it started
-  state.nodeColors = JSON.parse(dance.restingPaint);
-  dance = null;
-  k.btn.classList.remove(k.cls);
-  k.btn.setAttribute('aria-pressed', 'false');
+function flashBeat() {
+  beatDot.classList.add('lit');
+  clearTimeout(perf.litTimer);
+  perf.litTimer = setTimeout(() => beatDot.classList.remove('lit'), Math.min(110, beatMs(anim.bpm) / 3));
+  // During the count-in nothing on the sheet moves, so the number is the only
+  // thing telling you the clock is already turning.
+  countdown.textContent = perf.beat < 0 ? String(-perf.beat) : '';
+}
+
+function anythingOn() {
+  return anim.move !== 'none' || Object.values(anim.looks).some((l) => l.on);
+}
+
+function startPerf() {
+  if (perf) return;
+  if (!state.lines.length) return toast('Draw something first.');
+  if (!anythingOn()) return toast('Nothing to play — turn on a movement or a look in ⚙.');
+  if (anim.move === 'shape' && !shapes().length) {
+    return toast('Shapes moves filled pockets — fill one first.');
+  }
+  if (anim.move === 'path' && !Object.keys(state.paths).length) {
+    return toast('No routes yet — switch to Path mode and draw one.');
+  }
+  toastEl.classList.remove('show');   // the pill lands where the toast sits
+  if (draft) finishPath();
+
+  const occupied = occupiedNodes();
+  // A route whose anchor lost its lines, or that ran off a narrower screen, has
+  // nothing to move; dropping it here beats moving a node that isn't there.
+  const live = Object.fromEntries(
+    Object.entries(state.paths).filter(([, p]) => pathValid(p, occupied, cols, rows)));
+
+  perf = {
+    move: anim.move,
+    resting: JSON.stringify(state.lines),
+    restingPaint: JSON.stringify(state.nodeColors),
+    beat: anim.countIn ? -4 : 0,
+    timer: 0, litTimer: 0, tracedAt: 0,
+    offsets: new Map(),
+    // `chosen` starts empty, meaning "let the slider decide". Tapping fills it,
+    // and stopping and starting again is how you empty it.
+    chosen: new Set(), at: new Map(),
+    walkers: walkers(live),
+    tracers: [],
+    firedAt: {},
+    ears: { slow: null, fast: null, firedAt: -Infinity },
+  };
+  state.chain = null;
+  drag = null;
+  paintPlay();
+  danceBar.hidden = false;
+  paintPill();
+  runBeat();
+  if (!ears) schedule();   // while listening, the music books the beats
+}
+
+function stopPerf() {
+  if (!perf) return;
+  clearTimeout(perf.timer);
+  clearTimeout(perf.litTimer);
+  state.lines = JSON.parse(perf.resting);   // snap back to where it started
+  state.nodeColors = JSON.parse(perf.restingPaint);
+  perf = null;
+  beatDot.classList.remove('lit');
+  countdown.textContent = '';
   danceBar.hidden = true;
+  danceBar.classList.remove('picking');
+  paintPlay();
   facesStale = true;
   draw();
 }
 
-// --- listening ---------------------------------------------------------------
+function paintPlay() {
+  playBtn.setAttribute('aria-pressed', String(!!perf));
+  playBtn.innerHTML = perf ? '&#9632;' : '&#9654;';
+  playBtn.title = perf ? 'Stop' : 'Start the animation';
+  document.body.dataset.move = perf ? perf.move : anim.move;
+}
+
+// The pill carries only what gets reached for mid-performance. The count slider
+// means a different thing per movement layer and has nothing to say for routes,
+// where every walker walks.
+function paintPill() {
+  const m = perf ? perf.move : anim.move;
+  const shows = m === 'point' || m === 'shape';
+  countGroup.hidden = !shows;
+  if (shows) {
+    countLabel.textContent = MOVE_LABEL[m];
+    count.max = MOVE_MAX[m];
+    count.value = anim.counts[m];
+    countOut.textContent = anim.counts[m];
+  }
+}
+
+playBtn.onclick = () => (perf ? stopPerf() : startPerf());
+
+count.oninput = () => {
+  const m = perf ? perf.move : anim.move;
+  if (!MOVE_LABEL[m]) return;
+  anim.counts[m] = +count.value;
+  countOut.textContent = count.value;
+  save();
+  // The point layer redraws from rest every beat, so showing the new number at
+  // once is free. The shape layer would have to step its shapes to show it,
+  // which is a move the user didn't ask for; it waits for the next beat.
+  if (perf?.move === 'point') { pointTick(); draw(); }
+};
+
+// --- tempo -----------------------------------------------------------------
+
+function paintBpm() {
+  bpmOut.textContent = anim.bpm;
+  dBpmOut.textContent = anim.bpm;
+}
+
+function setBpm(v) {
+  if (v == null) return;
+  anim.bpm = clampBpm(v);
+  paintBpm();
+  save();
+}
+
+const nudge = (d) => () => setBpm(anim.bpm + d);
+document.getElementById('bpmdown').onclick = nudge(-1);
+document.getElementById('bpmup').onclick = nudge(1);
+document.getElementById('dbpmdown').onclick = nudge(-1);
+document.getElementById('dbpmup').onclick = nudge(1);
+
+// Halving and doubling land on the tempo you meant far more often than walking
+// there one BPM at a time. Out of range they refuse and say so, rather than
+// clamping to the end and looking like they did something else.
+const scale = (f) => () => {
+  const next = scaleBpm(anim.bpm, f);
+  if (next === null) return toast(`${anim.bpm} ${f > 1 ? 'doubled' : 'halved'} is outside ${MIN_BPM}–${MAX_BPM} BPM.`);
+  setBpm(next);
+};
+document.getElementById('half').onclick = scale(0.5);
+document.getElementById('double').onclick = scale(2);
+
+// Tap four times along with the track. This is the one tempo control that sets
+// where beat one *is* as well as how fast they come: the last tap restarts the
+// clock, so the drawing lands on the downbeat you tapped rather than wherever
+// the previous beat happened to leave it.
+let taps = [];
+function tapped() {
+  const now = performance.now();
+  if (taps.length && now - taps.at(-1) > 2000) taps = [];
+  taps.push(now);
+  if (taps.length > 8) taps.shift();
+  const found = tapTempo(taps);
+  if (found) setBpm(found);
+  if (perf) {
+    clearTimeout(perf.timer);
+    perf.beat = 0;
+    runBeat();
+    if (!ears) schedule();
+  }
+  if (!found) toast('Keep tapping — two taps in time is the least it can read.');
+}
+document.getElementById('taptempo').onclick = tapped;
+document.getElementById('dtap').onclick = tapped;
+
+// --- the drawer ------------------------------------------------------------
+
+const drawer = document.getElementById('drawer');
+const animBtn = document.getElementById('animate');
+
+function showDrawer(on) {
+  drawer.hidden = !on;
+  animBtn.setAttribute('aria-pressed', String(on));
+  if (on) showPalette(false);
+}
+animBtn.onclick = () => showDrawer(drawer.hidden);
+document.getElementById('drawerclose').onclick = () => showDrawer(false);
+
+// Divisions read as musical time rather than as numbers: "every bar" is what a
+// four is, and a menu that says four makes you do the arithmetic yourself.
+const DIV_LABEL = { 1: 'every beat', 2: 'every 2', 4: 'every bar', 8: 'every 2 bars', 16: 'every 4 bars' };
+function divSelect(value, onchange) {
+  const sel = document.createElement('select');
+  for (const d of DIVS) {
+    const o = document.createElement('option');
+    o.value = d;
+    o.textContent = DIV_LABEL[d];
+    sel.append(o);
+  }
+  sel.value = value;
+  sel.onchange = () => onchange(+sel.value);
+  return sel;
+}
+
+const moveSeg = document.getElementById('movement');
+const moveOpts = document.getElementById('moveopts');
+const leashGroup = document.getElementById('leashgroup');
+const leash = document.getElementById('leash');
+const leashOut = document.getElementById('leashout');
+const moveDivSel = divSelect(anim.moveDiv, (v) => { anim.moveDiv = v; save(); });
+moveDivSel.id = 'movediv';
+document.getElementById('movediv').replaceWith(moveDivSel);
+
+function paintMovement() {
+  for (const b of moveSeg.children) b.setAttribute('aria-pressed', String(b.dataset.move === anim.move));
+  moveOpts.hidden = anim.move === 'none';
+  leashGroup.hidden = anim.move !== 'shape';
+  moveDivSel.value = anim.moveDiv;
+  leash.value = anim.leash;
+  leashOut.textContent = anim.leash;
+  paintPill();
+  paintPlay();
+}
+
+moveSeg.onclick = (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  anim.move = b.dataset.move;
+  // Movement layers own every node, so switching is a restart rather than a
+  // handover — the running one has to put the drawing back before the next
+  // takes a snapshot of it.
+  if (perf) { stopPerf(); startPerf(); }
+  paintMovement();
+  save();
+};
+
+leash.oninput = () => {
+  anim.leash = +leash.value;
+  leashOut.textContent = leash.value;
+  save();
+};
+
+// One row per look, built from the table rather than from markup, so the next
+// look to be added is an entry in `anim.looks` plus a line here.
+const LOOK_META = {
+  cycle:  { label: '&#9673; Colour cycle', hint: 'Walk every fill and line through the palette' },
+  pop:    { label: '&#9670; Shape pop', hint: 'Filled pockets pulse on the beat' },
+  strobe: { label: '&#9728; Strobe', hint: 'Fills blink out, leaving the wireframe' },
+  trace:  { label: '&#10022; Path trace', hint: 'A glowing point runs the lines' },
+  reveal: { label: '&#9608; Build on', hint: 'Lines appear one at a time' },
+};
+
+const looksBox = document.getElementById('looks');
+// Every control that shows a value registers how to put that value back, so
+// loading a preset repaints the whole panel rather than the toggles alone —
+// half a repainted panel is a panel that lies about what is running.
+const repaint = [];
+
+for (const [name, cfg] of Object.entries(anim.looks)) {
+  const row = document.createElement('div');
+  row.className = 'look';
+
+  const toggle = document.createElement('button');
+  toggle.innerHTML = LOOK_META[name].label;
+  toggle.title = LOOK_META[name].hint;
+  toggle.onclick = () => {
+    cfg.on = !cfg.on;
+    toggle.setAttribute('aria-pressed', String(cfg.on));
+    save();
+    // Turning a look on mid-performance should show immediately rather than
+    // waiting for its division to come round.
+    if (perf) { perf.firedAt[name] = performance.now(); draw(); }
+  };
+  repaint.push(() => toggle.setAttribute('aria-pressed', String(cfg.on)));
+
+  const div = divSelect(cfg.div, (v) => { cfg.div = v; save(); });
+  repaint.push(() => { div.value = cfg.div; });
+  row.append(toggle, div);
+
+  // Per-look extras. Kept beside the toggle rather than in a submenu: there are
+  // at most two, and a menu to reach one checkbox is a worse trade than the
+  // width it saves.
+  if (name === 'cycle') {
+    const rip = document.createElement('button');
+    rip.className = 'step wide';
+    rip.textContent = 'Ripple';
+    rip.title = 'Stagger the change across the drawing instead of all at once';
+    rip.onclick = () => {
+      cfg.ripple = !cfg.ripple;
+      rip.setAttribute('aria-pressed', String(cfg.ripple));
+      save();
+      draw();
+    };
+    repaint.push(() => rip.setAttribute('aria-pressed', String(cfg.ripple)));
+    row.append(rip);
+  }
+  if (name === 'trace') {
+    const n = document.createElement('input');
+    n.type = 'range'; n.min = 1; n.max = 5; n.value = cfg.n;
+    n.style.width = '54px';
+    n.title = 'How many points are running';
+    const out = document.createElement('output');
+    out.textContent = cfg.n;
+    n.oninput = () => { cfg.n = +n.value; out.textContent = n.value; save(); };
+    const follow = document.createElement('button');
+    follow.className = 'step wide';
+    follow.textContent = 'Routes';
+    follow.title = 'Run the drawn routes instead of roaming the lines';
+    follow.onclick = () => {
+      cfg.follow = !cfg.follow;
+      follow.setAttribute('aria-pressed', String(cfg.follow));
+      if (perf) perf.tracers = [];   // re-spawn onto whichever track it is now
+      save();
+    };
+    repaint.push(() => {
+      follow.setAttribute('aria-pressed', String(cfg.follow));
+      n.value = cfg.n;
+      out.textContent = cfg.n;
+    });
+    row.append(n, out, follow);
+  }
+  row.dataset.look = name;
+  looksBox.append(row);
+}
+
+const paintLooks = () => repaint.forEach((f) => f());
+
+const countIn = document.getElementById('countin');
+countIn.onchange = () => { anim.countIn = countIn.checked; save(); };
+const dropFx = document.getElementById('dropfx');
+dropFx.onchange = () => { anim.drop = dropFx.checked; save(); };
+
+function paintDrawer() {
+  paintMovement();
+  paintLooks();
+  paintBpm();
+  countIn.checked = anim.countIn;
+  dropFx.checked = anim.drop;
+}
+
+// --- presets ---------------------------------------------------------------
+//
+// A whole configuration under one button, because rebuilding a look on a phone
+// while a track is playing is not something anyone does twice. Saving is armed
+// first and then aimed, like Clear: a slot is overwritten for good, and a
+// mis-aimed thumb should not be able to do that in one tap.
+
+const slotBox = document.getElementById('slots');
+const saveSlot = document.getElementById('saveslot');
+let arming = false;
+
+const readSlots = () => { try { return JSON.parse(localStorage.getItem(SLOTS)) || {}; } catch { return {}; } };
+
+function paintSlots() {
+  const slots = readSlots();
+  for (const b of slotBox.querySelectorAll('[data-slot]')) {
+    b.classList.toggle('filled', !!slots[b.dataset.slot]);
+  }
+  saveSlot.textContent = arming ? 'Pick one' : 'Save';
+  saveSlot.classList.toggle('armed', arming);
+}
+
+saveSlot.onclick = () => { arming = !arming; paintSlots(); };
+
+slotBox.onclick = (e) => {
+  const b = e.target.closest('[data-slot]');
+  if (!b) return;
+  const slots = readSlots();
+  if (arming) {
+    slots[b.dataset.slot] = JSON.parse(JSON.stringify(anim));
+    try { localStorage.setItem(SLOTS, JSON.stringify(slots)); } catch {}
+    arming = false;
+    paintSlots();
+    return toast(`Saved to ${b.textContent}.`);
+  }
+  if (!slots[b.dataset.slot]) return toast('Nothing in that slot yet — set a look up, then Save.');
+  adoptAnim(slots[b.dataset.slot]);
+  paintDrawer();
+  save();
+  if (perf) { stopPerf(); startPerf(); }
+};
+
+// --- listening -------------------------------------------------------------
 
 // Experimental. Two readings of "dance to the music", switchable so they can be
 // compared against the same track:
@@ -811,7 +1507,7 @@ function stopDance() {
 //   notes — every sounding pitch class displaces the one node it owns, and the
 //           node returns when the note stops. A trill between two pitches reads
 //           as two nodes flicking at each other, which is the point.
-//   beats — a new note fires one ordinary beat of whichever dance is running.
+//   beats — a new note fires one ordinary beat of whatever is running.
 //           Keeps the existing feel and just takes the clock off the metronome.
 //
 // listen.js gives twelve pitch-class levels, not notes, so "a note" is a class
@@ -828,7 +1524,7 @@ function setMapping(m) {
   mapping = m;
   mapNotesBtn.setAttribute('aria-pressed', String(m === 'notes'));
   mapBeatsBtn.setAttribute('aria-pressed', String(m === 'beats'));
-};
+}
 mapNotesBtn.onclick = () => setMapping('notes');
 mapBeatsBtn.onclick = () => setMapping('beats');
 
@@ -843,21 +1539,37 @@ function notesTick(now) {
   const fired = started(on, ears.on);
   ears.on = on;
 
+  // A drop is the one moment in an EDM track that everything should answer at
+  // once, so it fires every look regardless of its division and gives the
+  // movement layer an extra beat.
+  if (anim.drop) {
+    const e = trackEnergy(perf.ears, levels, now * 1000);
+    perf.ears = e;
+    if (e.dropped) {
+      const at = performance.now();
+      for (const [name, cfg] of Object.entries(anim.looks)) if (cfg.on) perf.firedAt[name] = at;
+      if (anim.move !== 'none') MOVE_TICK[anim.move]();
+      flashBeat();
+      draw();
+    }
+  }
+
   if (mapping === 'beats') {
-    if (fired.length) dance.run();
+    if (fired.length) { perf.beat++; runBeat(); }
     return;
   }
 
+  if (anim.move === 'none') return;   // the looks are on the clock; only movement reads notes
   const key = on.join(',');
   if (key === ears.shown) return;
   ears.shown = key;
 
-  state.lines = JSON.parse(dance.resting);
-  state.nodeColors = JSON.parse(dance.restingPaint);
+  state.lines = JSON.parse(perf.resting);
+  state.nodeColors = JSON.parse(perf.restingPaint);
   facesStale = true;
   const ordered = inReadingOrder([...occupiedNodes()].map((k) => k.split(',').map(Number)));
   moveNodes(notesToMoves(on, ordered, cols, rows));
-  dance.at = new Map(ordered.map((n) => [n.join(','), n]));
+  perf.at = new Map(ordered.map((n) => [n.join(','), n]));
   draw();
 }
 
@@ -891,21 +1603,29 @@ async function startListening() {
     return toast("Couldn't hear anything — this needs a tab with audio, or a microphone.");
   }
 
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  if (ctx.state === 'suspended') ctx.resume();
+  const actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (actx.state === 'suspended') actx.resume();
   // sefirograph lets a note fall away over 0.18s, which reads as sustain behind
   // a glow. A step is discrete, so here the fall has to be done before the next
   // note lands or a trill just holds both nodes out: measured against an 8
   // notes/sec trill, 0.18 gave 3 changes in four seconds and 0.09 gave 65.
   // Overridden from this side so the vendored file stays a copy, not a fork.
   const heard = { ...CHROMA_CONFIG, releaseTau: 0.09 };
-  ears = { ctx, stream, listener: createListener(ctx, stream, heard), on: [], shown: '', frame: 0 };
+  ears = { ctx: actx, stream, listener: createListener(actx, stream, heard), on: [], shown: '', frame: 0 };
   stream.getAudioTracks()[0].onended = () => stopListening();
 
-  // Listening drives whichever dance is running, so without one there is
-  // nothing to hear it. Start the point dance rather than doing nothing.
-  if (!dance) startDance('point');
+  // Listening drives whatever is running, so without anything there is nothing
+  // to hear it. Start the point layer rather than doing nothing.
+  if (!perf) {
+    if (anim.move === 'none' && !Object.values(anim.looks).some((l) => l.on)) {
+      anim.move = 'point';
+      paintMovement();
+    }
+    startPerf();
+  }
+  if (!perf) return stopListening();   // it refused — nothing to draw, most likely
 
+  clearTimeout(perf.timer);            // the music books the beats from here
   listenBtn.classList.add('listening');
   listenBtn.setAttribute('aria-pressed', 'true');
   hearing.hidden = false;
@@ -913,7 +1633,7 @@ async function startListening() {
 
   const loop = () => {
     if (!ears) return;
-    if (dance) notesTick(ears.ctx.currentTime);
+    if (perf) notesTick(ears.ctx.currentTime);
     ears.frame = requestAnimationFrame(loop);
   };
   ears.frame = requestAnimationFrame(loop);
@@ -930,57 +1650,44 @@ function stopListening() {
   listenBtn.setAttribute('aria-pressed', 'false');
   hearing.hidden = true;
   tempoGroup(true);
-  if (dance) {
-    state.lines = JSON.parse(dance.resting);
-    state.nodeColors = JSON.parse(dance.restingPaint);
+  if (perf) {
+    state.lines = JSON.parse(perf.resting);
+    state.nodeColors = JSON.parse(perf.restingPaint);
     facesStale = true;
+    schedule();                        // the metronome takes the clock back
     draw();
   }
 }
 
 // The tempo controls have nothing to say while the music is the clock.
 function tempoGroup(show) {
-  for (const el of [bpm, bpmOut, document.getElementById('bpmdown'),
+  for (const el of [bpmOut, document.getElementById('bpmdown'),
                     document.getElementById('bpmup'),
-                    document.querySelector('label[for="bpm"]')]) {
+                    document.getElementById('taptempo'),
+                    document.querySelector('label[for="bpmout"]')]) {
     el.hidden = !show;
   }
 }
 
 listenBtn.onclick = () => (ears ? stopListening() : startListening());
 
-// Starting one dance stops the other: they both own every node, so running both
-// would have each fighting the other's restore.
-const toggle = (kind) => () => {
-  const running = dance?.kind;
-  stopDance();
-  if (running !== kind) startDance(kind);
-};
-danceBtn.onclick = toggle('point');
-shapeBtn.onclick = toggle('shape');
+// --- performance mode ------------------------------------------------------
+//
+// The toolbar is in the screen recording, so there has to be a way to take it
+// out. What there must not be is a way out with no way back: an invisible tap
+// target to restore the chrome would be the palette gesture all over again, so
+// a small chevron stays on screen and says where to press.
 
-count.oninput = () => {
-  countOut.textContent = count.value;
-  if (dance) KINDS[dance.kind].count = +count.value;
-  // The point dance redraws from rest every beat, so showing the new number at
-  // once is free. The shape dance would have to step its shapes to show it,
-  // which is a move the user didn't ask for; it waits for the next beat.
-  if (dance?.kind === 'point') dance.run();
-};
+const unhide = document.getElementById('unhide');
+function setPerform(on) {
+  document.body.classList.toggle('perform', on);
+  unhide.hidden = !on;
+  if (on) { showDrawer(false); showPalette(false); }
+}
+document.getElementById('perform').onclick = () => setPerform(true);
+unhide.onclick = () => setPerform(false);
 
-bpm.oninput = () => {
-  bpmOut.textContent = bpm.value;
-  save();                       // a tempo you chose should still be there later
-};
-
-// The slider covers 210 BPM in about 60px, so it can only land on every third
-// value. These reach the ones in between.
-const nudgeBpm = (d) => () => {
-  bpm.value = Math.max(+bpm.min, Math.min(+bpm.max, +bpm.value + d));
-  bpm.dispatchEvent(new Event('input'));
-};
-document.getElementById('bpmdown').onclick = nudgeBpm(-1);
-document.getElementById('bpmup').onclick = nudgeBpm(1);
+// --- clear and share -------------------------------------------------------
 
 // Two taps to clear, rather than confirm() — embedded webviews suppress or hang
 // on modal dialogs, and a modal is a poor fit for a thumb anyway.
@@ -995,7 +1702,7 @@ function disarm() {
 }
 
 clearBtn.onclick = () => {
-  stopDance();
+  stopPerf();
   if (!state.lines.length) return;
   // Ignore a second tap that lands too fast to be a decision — a stray
   // double-tap should not be able to wipe the sheet.
@@ -1014,7 +1721,9 @@ clearBtn.onclick = () => {
   state.fills = {};
   state.lineColors = {};
   state.nodeColors = {};
+  state.paths = {};
   state.chain = null;
+  draft = null;
   facesStale = true;
   history.replaceState(null, '', location.pathname);
   save();
@@ -1022,7 +1731,7 @@ clearBtn.onclick = () => {
 };
 
 document.getElementById('share').onclick = async (e) => {
-  stopDance();   // share the drawing, not a random frame of it
+  stopPerf();   // share the drawing, not a random frame of it
   if (!state.lines.length) return;
   // Only fills whose pocket still exists are worth sending.
   const live = new Set(getFaces().map((f) => f.key));
@@ -1035,7 +1744,7 @@ document.getElementById('share').onclick = async (e) => {
   try {
     history.replaceState(null, '', '#' + encode({
       l: state.lines, f, p: custom ? state.palette : undefined,
-      lc: state.lineColors, nc,
+      lc: state.lineColors, nc, pa: state.paths,
     }));
   } catch (err) {
     return toast(err.message);
@@ -1061,16 +1770,20 @@ document.getElementById('share').onclick = async (e) => {
 //   pf.shapes();                             // one entry per filled pocket
 //   pf.moveShape(pf.shapes()[0].key, [1, 0]); pf.redraw();
 window.pf = {
-  state, moveNode, moveNodes, shapes, moveShape,
+  state, anim, moveNode, moveNodes, shapes, moveShape,
   redraw: () => { facesStale = true; draw(); },
   faces: getFaces,
+  play: startPerf, stop: stopPerf,
 };
 
 new ResizeObserver(resize).observe(canvas);
 load();
-// Both of these paint from state, so they have to run after load() has had its
+// Everything below paints from state, so it has to run after load() has had its
 // say — a drawing arriving with a custom palette needs it on the swatches too,
-// not just in the fills.
+// not just in the fills, and a stored animation config needs to reach the
+// drawer rather than sitting in `anim` with the panel showing defaults.
 paintSwatches();
 paintDotsBtn();
+paintDrawer();
+paintSlots();
 resize();

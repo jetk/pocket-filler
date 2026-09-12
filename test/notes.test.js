@@ -81,3 +81,64 @@ test('the same classes give the same moves every time', () => {
   const b = [...notesToMoves([0, 2, 5], square, 20, 20)];
   assert.deepEqual(a, b);
 });
+
+// --- intensity and the drop -------------------------------------------------
+
+import { energy, trackEnergy, DROP } from '../src/notes.js';
+
+const flat = (v) => new Array(12).fill(v);
+
+test('energy is how much is going on across the whole spectrum', () => {
+  assert.equal(energy(flat(0.5)), 0.5);
+  assert.equal(energy([]), 0);
+});
+
+// Feed the tracker a run of frames and report every moment it called a drop.
+function play(frames, step = 40) {
+  let st = { slow: null, fast: null, firedAt: -Infinity };
+  const hits = [];
+  frames.forEach((v, i) => {
+    st = trackEnergy(st, flat(v), i * step);
+    if (st.dropped) hits.push(i);
+  });
+  return hits;
+}
+
+test('a steady track never reads as a drop', () => {
+  assert.deepEqual(play(new Array(120).fill(0.6)), []);
+});
+
+test('silence into a wall of sound reads as one drop, not a hundred', () => {
+  const hits = play([...new Array(60).fill(0.05), ...new Array(80).fill(0.9)]);
+  assert.equal(hits.length, 1, `expected one hit, got ${hits.length}`);
+  assert.ok(hits[0] >= 60 && hits[0] < 70, `expected it at the transition, got ${hits[0]}`);
+});
+
+test('the hold lets a second drop through once it has expired', () => {
+  const quiet = new Array(60).fill(0.05), loud = new Array(80).fill(0.9);
+  // two builds, far enough apart that the hold has run out between them
+  const hits = play([...quiet, ...loud, ...quiet, ...loud]);
+  assert.equal(hits.length, 2);
+});
+
+test('a real build is not a drop — it is the thing a drop stands out from', () => {
+  // sixteen bars at 128 BPM is about 30 seconds, which at 40ms a frame is 750
+  const ramp = Array.from({ length: 750 }, (_, i) => 0.05 + 0.8 * (i / 750));
+  assert.deepEqual(play(ramp), []);
+});
+
+test('a steep enough rise is a hit, and that is the point rather than a flaw', () => {
+  // the same climb crammed into eight seconds outruns the slow average, which
+  // is exactly what the two-average test is for: it measures how fast energy
+  // arrived, not how loud it got
+  const fast = Array.from({ length: 200 }, (_, i) => 0.05 + 0.8 * (i / 200));
+  assert.equal(play(fast).length, 1);
+});
+
+test('the margin is what decides, so a smaller one is easier to trip', () => {
+  const frames = [...new Array(60).fill(0.4), ...new Array(40).fill(0.5)];
+  let st = { slow: null, fast: null, firedAt: -Infinity };
+  let any = false;
+  frames.forEach((v, i) => { st = trackEnergy(st, flat(v), i * 40, { ...DROP, margin: 0.02 }); any ||= st.dropped; });
+  assert.ok(any, 'a 0.1 jump should trip a 0.02 margin');
+});

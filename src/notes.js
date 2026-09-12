@@ -90,15 +90,20 @@ export const energy = (levels) => (levels.length ? levels.reduce((a, b) => a + b
 
 // A drop is energy jumping well clear of where it has been sitting. Two moving
 // averages, one slow enough to remember the build and one fast enough to catch
-// the hit, and a hold afterwards so one drop fires once rather than chattering
-// across every frame it stays loud.
+// the hit, and the gap between them is the hit.
+//
+// It fires on the RISE and not again until the gap has closed. A time hold on
+// its own is not enough: the gap stays open for as long as the track stays
+// loud, so a hold alone re-fires every time it expires — sixteen bars of a
+// chorus read as a drop every 1.2 seconds. The hold is still here, but only to
+// stop a gap hovering on the threshold from chattering.
 export const DROP = { slow: 0.02, fast: 0.4, margin: 0.18, holdMs: 1200 };
 
 export function trackEnergy(st, levels, now, cfg = DROP) {
   const e = energy(levels);
   const slow = st.slow == null ? e : st.slow + (e - st.slow) * cfg.slow;
   const fast = st.fast == null ? e : st.fast + (e - st.fast) * cfg.fast;
-  const armed = now - (st.firedAt ?? -Infinity) > cfg.holdMs;
-  const dropped = armed && st.slow != null && fast - slow > cfg.margin;
-  return { slow, fast, firedAt: dropped ? now : st.firedAt, dropped };
+  const hot = st.slow != null && fast - slow > cfg.margin;
+  const dropped = hot && !st.hot && now - (st.firedAt ?? -Infinity) > cfg.holdMs;
+  return { slow, fast, hot, firedAt: dropped ? now : st.firedAt, dropped };
 }
