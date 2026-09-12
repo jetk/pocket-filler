@@ -120,6 +120,15 @@
     border: 1px solid var(--edge);
     box-shadow: 0 1px 3px rgba(0, 0, 0, .1);
     z-index: 4;
+    /* In performance mode this carries the whole interface, which on a narrow
+       phone can be wider than the phone. Wrapping keeps it on screen; without
+       the max-width it would centre and then run off BOTH edges at once.
+       `width: max-content` is the part that is not optional: a fixed element at
+       `left: 50%` has only the half-viewport to its right as its containing
+       block, so shrink-to-fit caps its width there and it wraps at half the
+       screen while the room it needs is sitting unused on the other side. */
+    width: max-content; max-width: calc(100vw - 16px);
+    flex-wrap: wrap; justify-content: center;
   }
   .dancebar label { opacity: .7; }
   .dancebar input[type="range"] { width: 46px; height: 18px; margin: 0; }
@@ -133,6 +142,19 @@
   }
   .step.wide { width: auto; padding: 0 7px; font-size: 11px; }
   .step[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  #hearing { display: flex; gap: 4px; }
+
+  /* On a narrow phone the pill in performance mode carries one control too many
+     and wraps. The word "Movers" is the one thing in there that the slider
+     beside it already says, so it is what goes; and if a future control makes it
+     wrap anyway, a rounded rect degrades better than a 999px radius on a tall
+     box. Scoped through the id deliberately — a bare class here would lose to
+     `.dancebar label`, which is the collision this file has been bitten by
+     three times already. */
+  @media (max-width: 380px) {
+    .dancebar #countlabel { display: none; }
+    .dancebar { border-radius: 18px; gap: 4px; }
+  }
 
   /* One dot that lights on the beat. It is the only readout of where the clock
      actually is, which matters most during a count-in, when nothing else on the
@@ -181,6 +203,8 @@
   #palette {
     position: fixed; left: 50%; transform: translateX(-50%); bottom: var(--lift);
     display: flex; align-items: center; gap: 8px;
+    /* Same half-viewport containing block as the pill above. */
+    width: max-content; max-width: calc(100vw - 16px); flex-wrap: wrap; justify-content: center;
     padding: 6px 10px; border-radius: 999px;
     background: rgba(242, 242, 242, .96);
     background: color-mix(in srgb, var(--chrome) 96%, transparent);
@@ -291,7 +315,9 @@
      palette gesture, so a small chevron stays on screen. */
   body.perform #bar { display: none; }
   body.perform #toast { bottom: 12px; }
-  body.perform .dancebar, body.perform #palette { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+  /* Clear of the chevron, which sits in the bottom-right corner: at a flat 12px
+     the two share that corner and the pill's last button is under the chevron. */
+  body.perform .dancebar, body.perform #palette { bottom: calc(50px + env(safe-area-inset-bottom, 0px)); }
   #unhide {
     position: fixed; z-index: 7;
     right: calc(8px + env(safe-area-inset-right, 0px));
@@ -308,6 +334,10 @@
   <!-- What you reach for while the music is playing. Everything else is one
        tap away in the drawer, which is what keeps this down to a pill. -->
   <div id="dancebar" class="dancebar" hidden>
+    <!-- Only while the toolbar is hidden, where it is the sole way to start and
+         stop. With the bar up it would be a second copy of a button already on
+         screen, which is worse than no button at all. -->
+    <button id="pillplay" class="step" hidden title="Start and stop">&#9654;</button>
     <span id="countgroup">
       <label for="count" id="countlabel">Dancers</label>
       <!-- Zero is a useful setting, not a degenerate one: it holds the drawing

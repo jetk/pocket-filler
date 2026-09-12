@@ -1038,6 +1038,7 @@ const countOut = document.getElementById('countout');
 const bpmOut = document.getElementById('bpmout');
 const dBpmOut = document.getElementById('dbpmout');
 const beatDot = document.getElementById('beatdot');
+const pillPlay = document.getElementById('pillplay');
 const countdown = document.getElementById('countdown');
 const playBtn = document.getElementById('play');
 
@@ -1180,7 +1181,6 @@ function startPerf() {
   state.chain = null;
   drag = null;
   paintPlay();
-  danceBar.hidden = false;
   paintPill();
   runBeat();
   if (!ears) schedule();   // while listening, the music books the beats
@@ -1195,26 +1195,33 @@ function stopPerf() {
   perf = null;
   beatDot.classList.remove('lit');
   countdown.textContent = '';
-  danceBar.hidden = true;
   danceBar.classList.remove('picking');
   paintPlay();
+  paintPill();
   facesStale = true;
   draw();
 }
 
 function paintPlay() {
-  playBtn.setAttribute('aria-pressed', String(!!perf));
-  playBtn.innerHTML = perf ? '&#9632;' : '&#9654;';
-  playBtn.title = perf ? 'Stop' : 'Start the animation';
+  const on = !!perf;
+  for (const b of [playBtn, pillPlay]) {
+    b.setAttribute('aria-pressed', String(on));
+    b.innerHTML = on ? '&#9632;' : '&#9654;';
+    b.title = on ? 'Stop' : 'Start the animation';
+  }
   document.body.dataset.move = perf ? perf.move : anim.move;
 }
 
 // The pill carries only what gets reached for mid-performance. The count slider
 // means a different thing per movement layer and has nothing to say for routes,
 // where every walker walks.
+//
+// With the toolbar hidden the pill is the whole interface, so it stays up even
+// with the clock stopped and grows the play button the bar would otherwise
+// have carried. Hiding the chrome must not also hide the way to start.
 function paintPill() {
   const m = perf ? perf.move : anim.move;
-  const shows = m === 'point' || m === 'shape';
+  const shows = (m === 'point' || m === 'shape') && !!perf;
   countGroup.hidden = !shows;
   if (shows) {
     countLabel.textContent = MOVE_LABEL[m];
@@ -1222,9 +1229,13 @@ function paintPill() {
     count.value = anim.counts[m];
     countOut.textContent = anim.counts[m];
   }
+  const bare = document.body.classList.contains('perform');
+  pillPlay.hidden = !bare;
+  danceBar.hidden = !perf && !bare;
 }
 
 playBtn.onclick = () => (perf ? stopPerf() : startPerf());
+pillPlay.onclick = playBtn.onclick;
 
 count.oninput = () => {
   const m = perf ? perf.move : anim.move;
@@ -1683,6 +1694,7 @@ function setPerform(on) {
   document.body.classList.toggle('perform', on);
   unhide.hidden = !on;
   if (on) { showDrawer(false); showPalette(false); }
+  paintPill();
 }
 document.getElementById('perform').onclick = () => setPerform(true);
 unhide.onclick = () => setPerform(false);
