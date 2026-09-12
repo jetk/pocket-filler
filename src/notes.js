@@ -75,3 +75,30 @@ export function notesToMoves(classes, ordered, cols, rows) {
   }
   return moves;
 }
+
+// --- intensity -------------------------------------------------------------
+//
+// Where the track is, not which notes are in it. listen.js hands back a level
+// per pitch class, so the mean across all twelve is a serviceable stand-in for
+// how much is going on — a build fills the spectrum, a breakdown empties it.
+//
+// This deliberately doesn't reach into listen.js for its spectral flux: that
+// file is a verbatim copy of sefirograph's and is kept that way, so anything
+// this app wants that it doesn't already return gets derived out here instead.
+
+export const energy = (levels) => (levels.length ? levels.reduce((a, b) => a + b, 0) / levels.length : 0);
+
+// A drop is energy jumping well clear of where it has been sitting. Two moving
+// averages, one slow enough to remember the build and one fast enough to catch
+// the hit, and a hold afterwards so one drop fires once rather than chattering
+// across every frame it stays loud.
+export const DROP = { slow: 0.02, fast: 0.4, margin: 0.18, holdMs: 1200 };
+
+export function trackEnergy(st, levels, now, cfg = DROP) {
+  const e = energy(levels);
+  const slow = st.slow == null ? e : st.slow + (e - st.slow) * cfg.slow;
+  const fast = st.fast == null ? e : st.fast + (e - st.fast) * cfg.fast;
+  const armed = now - (st.firedAt ?? -Infinity) > cfg.holdMs;
+  const dropped = armed && st.slow != null && fast - slow > cfg.margin;
+  return { slow, fast, firedAt: dropped ? now : st.firedAt, dropped };
+}

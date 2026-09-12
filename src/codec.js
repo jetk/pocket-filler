@@ -7,6 +7,9 @@
 //   palette  optional, four chars per color (24 bits of rgb), six colors
 //   lineInk  optional, three chars per colored line: two-char line id, color
 //   nodeInk  optional, three chars per colored node: x, y, color
+//   paths    optional, one per '~': closed flag then two chars per waypoint.
+//            The first waypoint is the node the path belongs to and the key it
+//            is stored under, so the key is derived rather than repeated.
 // Trailing sections are dropped when empty and empty ones in the middle are
 // left as nothing between two dots, so a plain drawing's link is exactly the
 // length it always was and a link written before any of this still decodes.
@@ -41,7 +44,7 @@ const isCoord = (v) => Number.isInteger(v) && v >= 0 && v < 64;
 export const INK = 6;
 const isColor = (v) => Number.isInteger(v) && v >= 0 && v <= INK;
 
-export function encode({ l, f = {}, p, lc = {}, nc = {} }) {
+export function encode({ l, f = {}, p, lc = {}, nc = {}, pa = {} }) {
   const flat = l.flat();
   if (!flat.every(isCoord)) throw new RangeError('coordinates outside the shareable 0-63 grid');
 
@@ -67,16 +70,22 @@ export function encode({ l, f = {}, p, lc = {}, nc = {} }) {
     return c1(x) + c1(y) + c1(c);
   }).join('');
 
-  const tail = [pal, lineInk, nodeInk];
+  const paths = Object.values(pa).map((path) => {
+    const flat = path.pts.flat();
+    if (!flat.every(isCoord)) throw new RangeError('path outside the shareable 0-63 grid');
+    return c1(path.closed ? 1 : 0) + flat.map(c1).join('');
+  }).join('~');
+
+  const tail = [pal, lineInk, nodeInk, paths];
   while (tail.length && !tail[tail.length - 1]) tail.pop();
   return [`1.${flat.map(c1).join('')}`, fills.join('~'), ...tail].join('.');
 }
 
 export function decode(s) {
-  const [ver, lineStr = '', fillStr = '', palStr = '', lineStr2 = '', nodeStr = ''] = s.split('.');
+  const [ver, lineStr = '', fillStr = '', palStr = '', lineStr2 = '', nodeStr = '', pathStr = ''] = s.split('.');
   if (ver !== '1') throw new SyntaxError('unknown format');
   if (lineStr.length % 4) throw new SyntaxError('truncated line data');
-  if ([...lineStr + fillStr + palStr + lineStr2 + nodeStr].some((ch) => ch !== '~' && !A.includes(ch))) {
+  if ([...lineStr + fillStr + palStr + lineStr2 + nodeStr + pathStr].some((ch) => ch !== '~' && !A.includes(ch))) {
     throw new SyntaxError('corrupt characters');
   }
   if (palStr && palStr.length % 4) throw new SyntaxError('truncated palette data');
@@ -104,6 +113,16 @@ export function decode(s) {
     out.nc = {};
     for (let i = 0; i < nodeStr.length; i += 3) {
       out.nc[`${n1(nodeStr[i])},${n1(nodeStr[i + 1])}`] = n1(nodeStr[i + 2]);
+    }
+  }
+  if (pathStr) {
+    out.pa = {};
+    for (const entry of pathStr.split('~')) {
+      // flag, then pairs: anything else is a path that arrived half-written.
+      if (entry.length < 5 || (entry.length - 1) % 2) throw new SyntaxError('truncated path data');
+      const pts = [];
+      for (let i = 1; i < entry.length; i += 2) pts.push([n1(entry[i]), n1(entry[i + 1])]);
+      out.pa[pts[0].join(',')] = { pts, closed: n1(entry[0]) === 1 };
     }
   }
   if (palStr) {
